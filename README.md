@@ -161,6 +161,7 @@ Sampler:
 - `uniform`
 - `bandit` (epsilon-greedy profile)
 - `epsilon_greedy`
+- `exp3`
 
 Adversary:
 - `none`
@@ -230,7 +231,7 @@ Topology configs are in `conf/topology/`.
 
 Sampler configs are in `conf/sampler/`. They are used by dynamic topologies.
 
-- `name`: sampler implementation, for example `uniform` or `epsilon_greedy`.
+- `name`: sampler implementation, for example `uniform`, `epsilon_greedy`, or `exp3`.
 - `reward`: reward strategy for learning samplers. Current value: `parameter_distance`.
 - `params`: sampler-specific parameters, for example `epsilon` and `initial_value`.
 
@@ -505,9 +506,21 @@ uv run -m banditdl \
   seed=0
 ```
 
+Use EXP3:
+
+```bash
+uv run -m banditdl \
+  dataset=mnist \
+  topology=dynamic \
+  sampler=exp3 \
+  sampler.params.gamma=auto \
+  topology.sampling=0.05 \
+  seed=0
+```
+
 Current bandit feedback:
 - each neighbor is one arm,
-- MABWiser provides the epsilon-greedy bandit implementation,
+- MABWiser provides epsilon-greedy; EXP3 is implemented locally,
 - dynamic workers update selected arms after receiving neighbor weights,
 - reward is selected through a strategy object; the default is `parameter_distance`,
 - `parameter_distance` uses `1 / (1 + parameter_distance)` against the local model before aggregation.
@@ -520,4 +533,4 @@ Dynamic runs also save hindsight diagnostics for every sampler, including unifor
 - `selected_neighbors.npy`: sampled neighbors per round and worker.
 - `oracle_neighbors.npy`: best fixed hindsight neighbors per round and worker.
 
-This is intentionally small: sampler choice and sampler-specific parameters are Hydra-controlled, shared runtime facts are passed through `SamplerContext`, and reward design remains isolated behind the reward strategy API in `banditdl/core/sampling.py`.
+This is intentionally small: sampler choice and sampler-specific parameters are Hydra-controlled, shared runtime facts are passed through `SamplerContext`, and reward design remains isolated behind the reward strategy API in `banditdl/core/sampling.py`. For EXP3, `gamma: auto` uses `optimization.nb_steps` as the known horizon.

@@ -10,10 +10,16 @@ search_space:
   sampler.name:
     name: sampler
     type: categorical
-    choices: [uniform, epsilon_greedy]
+    choices: [uniform, epsilon_greedy, exp3]
   sampler.params.epsilon:
     name: epsilon
     type: categorical
     choices: [0.01, 0.1, 0.5, 0.9]
     when:
       sampler.name: epsilon_greedy
+  sampler.params.gamma:
+    name: gamma
+    type: categorical
+    choices: [auto, 0.01, 0.05, 0.1]
+    when:
+      sampler.name: exp3

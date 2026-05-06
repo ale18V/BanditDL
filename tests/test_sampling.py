@@ -2,8 +2,10 @@ import pytest
 import torch
 
 from banditdl.core.sampling import (
+    Exp3NeighborSampler,
     MultiArmedBanditSampler,
     ParameterDistanceReward,
+    SamplerContext,
     make_neighbor_sampler,
     make_reward_strategy,
 )
@@ -20,6 +22,26 @@ def test_bandit_sampler_prefers_high_reward_arm():
 def test_neighbor_sampler_factory():
     assert make_neighbor_sampler("uniform").sample([1, 2, 3], 2)
     assert isinstance(make_neighbor_sampler("bandit"), MultiArmedBanditSampler)
+
+
+def test_exp3_sampler_factory_uses_context_horizon():
+    context = SamplerContext(worker_id=0, nodes=4, k=2, horizon=100, seed=1)
+    sampler = make_neighbor_sampler("exp3", context=context, params={"gamma": "auto"})
+
+    assert isinstance(sampler, Exp3NeighborSampler)
+    assert sampler.horizon == 100
+    assert len(sampler.sample([1, 2, 3], 2)) == 2
+
+
+def test_exp3_sampler_prefers_high_reward_arm():
+    sampler = Exp3NeighborSampler(gamma=0.5, seed=0, horizon=100)
+    population = [1, 2, 3]
+    sampler.sample(population, 1)
+    for _ in range(20):
+        sampler.update(population, [0.0, 1.0, 0.0])
+
+    assert sampler._probabilities[1] > sampler._probabilities[0]
+    assert sampler._probabilities[1] > sampler._probabilities[2]
 
 
 def test_parameter_distance_reward():

@@ -1,0 +1,6 @@
+name: exp3
+reward: parameter_distance
+params:
+  gamma: auto
+  lower: 0.0
+  amplitude: 1.0
