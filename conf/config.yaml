@@ -1,6 +1,7 @@
 defaults:
   - dataset: mnist
-  - topology: dynamic_uniform
+  - topology: dynamic
+  - sampler: uniform
   - adversary: none
   - aggregator: mean
   - heterogeneity: alpha0.5
@@ -9,9 +10,8 @@ defaults:
   - _self_
   - override
 
-nodes: 30
 seed: 123
-device: "cpu"
+device: cpu
 
 hydra:
   run:

@@ -1,6 +1,0 @@
-name: "dynamic_bandit"
-sampling: 0.2
-neighbor_sampler: bandit
-bandit_epsilon: 0.1
-bandit_initial_value: 0.0
-bandit_reward: parameter_distance

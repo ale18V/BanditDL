@@ -1,5 +1,5 @@
-name: "none"
+name: none
 byzcount: 0
 byzantine_budget: 0
 attack: null
-mimic-learning-phase: 400 # optional learning phase for byzantine to mimic
+mimic_learning_phase: 400

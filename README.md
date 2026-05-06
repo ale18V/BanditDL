@@ -23,23 +23,26 @@ uv run -m banditdl
 Example overrides:
 
 ```bash
-uv run -m banditdl local=mnist topology=dynamic_uniform topology.nodes=100 topology.sampling=0.05 seed=0
+uv run -m banditdl dataset=mnist topology=dynamic sampler=uniform topology.nodes=100 topology.sampling=0.05 seed=0
 ```
 
 Runs print lightweight progress to stdout: start metadata, result directory, periodic decentralized-learning rounds, evaluation accuracy when available, and completion.
 
-## Choosing hydra config
+## Local Hydra Override
 
-Create a config named `override.yaml` with path `conf/override.yaml` that will be the local override of `config.yaml`, and it will be in the `.gitignore` so it won't be pushed. `override.yaml` must not be like `config.yaml`, instead its template is below:
+`conf/config.yaml` intentionally loads `conf/override.yaml`. That file is ignored by Git and is where each person puts machine-specific defaults such as device and output directories.
 
-```
+Create `conf/override.yaml` locally:
+
+```yaml
 defaults:
-  - override local: mnist
-  - override topology: dynamic_uniform
-  - override adversary: none
+  - override /dataset: mnist
+  - override /topology: dynamic
+  - override /sampler: uniform
+  - override /adversary: none
 
 seed: 0
-device: "mps"
+device: mps
 
 hydra:
   run:
@@ -134,25 +137,30 @@ overrides or edit `sweep.yaml` for those.
 
 ```bash
 uv run -m banditdl -m \
-  local=mnist \
-  topology=dynamic_uniform \
+  dataset=mnist \
+  topology=dynamic \
+  sampler=uniform,bandit \
   seed=0,1 \
   topology.nodes=50,100 \
   topology.sampling=0.03,0.05 \
-  topology.neighbor_sampler=uniform,bandit \
-  local.nb_local_steps=1,3
+  sampler.params.epsilon=0.1,0.3 \
+  optimization.nb_local_steps=1,3
 ```
 
 ## Existing Config Groups
 
-Local training:
+Dataset:
 - `mnist`
 - `cifar10`
 
-Topology/sampling:
-- `dynamic_uniform`
-- `dynamic_bandit`
+Topology:
+- `dynamic`
 - `fixed_cs`
+
+Sampler:
+- `uniform`
+- `bandit` (epsilon-greedy profile)
+- `epsilon_greedy`
 
 Adversary:
 - `none`
@@ -170,33 +178,63 @@ uv run -m banditdl --cfg job
 
 ### Top-Level Config
 
-- `local`: local ML setup config group.
-- `topology`: decentralized topology and neighbor sampling config group.
+- `dataset`: dataset/model config group.
+- `topology`: decentralized topology config group.
+- `sampler`: dynamic neighbor sampler config group.
 - `adversary`: Byzantine/adversarial setup config group.
+- `aggregator`: robust aggregation config group.
+- `heterogeneity`: data heterogeneity config group.
+- `optimization`: local optimizer/training schedule config group.
+- `evaluation`: evaluation cadence config group.
 - `seed`: random seed. Use comma-separated values under `-m` for sweeps.
 - `device`: `auto`, `cpu`, or a torch device string such as `cuda`.
 
-### Local Training Config
+### Dataset Config
 
-Local configs are in `conf/local/`. They describe dataset/model/optimizer-style ML parameters.
+Dataset configs are in `conf/dataset/`.
 
 - `dataset`: dataset name passed to the loader. Common values: `mnist`, `cifar10`.
 - `model`: model constructor from `banditdl/data/models.py`, for example `cnn_mnist` or `cnn_cifar_old`.
-- `alpha`: Dirichlet data heterogeneity parameter passed as `dirichlet-alpha`.
-- `nb_local_steps`: local SGD steps per communication round.
-- `params_common`: training hyperparameters passed to the engine.
 
-### Topology And Sampling Config
+### Heterogeneity Config
+
+Heterogeneity configs are in `conf/heterogeneity/`.
+
+- `alpha`: Dirichlet data heterogeneity parameter passed as `dirichlet-alpha`.
+- `numb_labels`: number of dataset labels.
+
+### Optimization Config
+
+Optimization configs are in `conf/optimization/`.
+
+- `batch_size`: training batch size.
+- `loss`: torch loss class name, for example `NLLLoss`.
+- `learning_rate`: optional SGD learning rate. Engine default is `0.5`.
+- `learning_rate_decay`: optional worker learning-rate decay scale.
+- `learning_rate_decay_delta`: optional step interval for learning-rate decay checks.
+- `weight_decay`: SGD weight decay.
+- `momentum_worker`: worker momentum.
+- `nb_steps`: number of communication/training rounds. This is the sampler horizon.
+- `nb_local_steps`: local SGD steps per communication round.
+
+### Topology Config
 
 Topology configs are in `conf/topology/`.
 
 - `nodes`: total simulated participants, including Byzantine participants.
-- `neighbor_sampler`: neighbor selection/aggregation strategy. Dynamic samplers: `uniform`, `bandit`, `epsilon_greedy`. Fixed-graph methods: `cs+`, `cs_he`, `gts`.
-- `sampling`: dynamic sampler ratio. Used when `neighbor_sampler` is `uniform`/`bandit`/`epsilon_greedy`. The dynamic worker samples about `round((nodes - 1) * sampling)` neighbors.
-- `degree`: fixed-graph degree target. Used when `neighbor_sampler` is `cs+`/`cs_he`/`gts`.
-- `bandit_epsilon`: epsilon-greedy exploration rate. Used by `bandit`/`epsilon_greedy` samplers.
-- `bandit_initial_value`: initial reward estimate for unseen arms.
-- `bandit_reward`: reward strategy. Current value: `parameter_distance`.
+- `sampling`: dynamic sampling ratio. Dynamic topologies define `sampling`.
+- `degree`: fixed-graph degree target. Fixed topologies define `degree`.
+- `method`: fixed-graph method, for example `cs+`.
+
+### Sampler Config
+
+Sampler configs are in `conf/sampler/`. They are used by dynamic topologies.
+
+- `name`: sampler implementation, for example `uniform` or `epsilon_greedy`.
+- `reward`: reward strategy for learning samplers. Current value: `parameter_distance`.
+- `params`: sampler-specific parameters, for example `epsilon` and `initial_value`.
+
+Shared runtime facts such as `topology.nodes`, sampled-neighbor count, `optimization.nb_steps`, and seed are passed to samplers through runtime context rather than duplicated in sampler config.
 
 ### Adversary Config
 
@@ -206,31 +244,13 @@ Adversary configs are in `conf/adversary/`.
 - `byzantine_budget`: robustness budget `b_hat`. If unset/null, defaults to `byzcount`.
 - `attack`: Byzantine attack name or `null`. Available attacks include `SF`, `LF`, `FOE`, `ALIE`, `mimic`, `auto_ALIE`, `auto_FOE`, `inf`.
 
-### Common Training Params
+### Aggregator Config
 
-These live under `local.params_common`.
+Aggregator configs are in `conf/aggregator/`.
 
-- `batch-size`: training batch size.
-- `batch-size-test`: test batch size. Defaults to `100` if omitted.
-- `loss`: torch loss class name, for example `NLLLoss`.
-- `learning-rate`: SGD learning rate. Defaults to `0.5` if omitted.
-- `learning-rate-decay`: decay scale used by the worker learning-rate schedule.
-- `learning-rate-decay-delta`: step interval for learning-rate decay checks.
-- `weight-decay`: SGD weight decay.
-- `momentum-worker`: worker momentum.
-- `nb-steps`: number of communication/training rounds.
-- `evaluation-delta`: evaluate every N rounds.
-- `numb-labels`: number of dataset labels.
-- `pre-aggregator`: optional first-stage robust aggregation rule, commonly `nnm`.
-- `aggregator`: robust aggregator, commonly `trmean`.
-- `rag`: robust aggregation flag for dynamic samplers (`uniform`, `bandit`, `epsilon_greedy`). Dynamic runs force this to `true`.
-- `mimic-learning-phase`: optional learning phase length for mimic attacks.
-- `bucket-size`: robust aggregation bucket size. Defaults to `1`.
-- `gradient-clip`: optional gradient clipping threshold.
-- `server-clip`: optional server clipping flag.
-- `hetero`: dataset heterogeneity flag. Defaults to `false`.
-- `distinct-data`: give workers distinct local datasets. Defaults to `false`.
-- `nb-datapoints`: local datapoint count for distinct-data setups.
+- `pre_aggregator`: optional first-stage robust aggregation rule, commonly `nnm`.
+- `aggregator`: robust aggregator, commonly `average` or `trmean`.
+- `rag`: robust aggregation flag. Dynamic runs force this to `true`.
 
 Available robust aggregators include `average`, `trmean`, `median`, `geometric_median`, `krum`, `multi_krum`, `nnm`, `bucketing`, `pmk`, `cc`, `mda`, `mva`, `monna`, `meamed`.
 
@@ -240,8 +260,9 @@ Ad-hoc sweep:
 
 ```bash
 uv run -m banditdl -m \
-  local=mnist,cifar10 \
-  topology=dynamic_uniform,dynamic_bandit \
+  dataset=mnist,cifar10 \
+  topology=dynamic \
+  sampler=uniform,bandit \
   topology.nodes=50,100 \
   topology.sampling=0.03,0.05 \
   adversary=none \
@@ -252,25 +273,30 @@ Hydra takes the Cartesian product of comma-separated override values.
 
 ## How To Create A New Experiment
 
-1. Add or copy a config in `conf/local/`, `conf/topology/`, or `conf/adversary/`.
+1. Add or copy a config in `conf/dataset/`, `conf/topology/`, `conf/sampler/`, `conf/aggregator/`, `conf/heterogeneity/`, `conf/optimization/`, or `conf/adversary/`.
 2. Compose them from the CLI with Hydra overrides.
 
 Example:
 
 ```yaml
-# conf/topology/my_bandit.yaml
+# conf/sampler/my_bandit.yaml
+name: epsilon_greedy
+reward: parameter_distance
+params:
+  epsilon: 0.1
+  initial_value: 0.0
+```
+
+```yaml
+# conf/topology/my_dynamic.yaml
 nodes: 100
 sampling: 0.05
-neighbor_sampler: bandit
-bandit_epsilon: 0.1
-bandit_initial_value: 0.0
-bandit_reward: parameter_distance
 ```
 
 Run it:
 
 ```bash
-uv run -m banditdl local=mnist topology=my_bandit adversary=none
+uv run -m banditdl dataset=mnist topology=my_dynamic sampler=my_bandit adversary=none
 ```
 
 ## Plot Saved Results
@@ -346,19 +372,20 @@ flowchart TD
     A[User: uv run -m banditdl ...] --> B[banditdl.__main__]
     B --> C[experiments.hydra_run]
     C --> D[Hydra config composition
-conf/config.yaml + local/topology/adversary]
+conf/config.yaml + dataset/topology/sampler/...]
 
     D --> E{Hydra mode}
     E -->|single run| F[One composed config]
     E -->|multirun -m| G[Cartesian expansion from
 hydra.sweeper.params + CLI overrides]
 
-    F --> H[hydra_run dispatches training engine]
+    F --> H[config_adapter builds one engine config]
     G --> H
+    H --> X[hydra_run dispatches training engine]
 
-    H --> I1[Training engine
+    X --> I1[Training engine
 experiments.engine::run_dynamic]
-    H --> I2[Training engine
+    X --> I2[Training engine
     experiments.engine::run_fixed]
 
     I1 --> J1[data.*
@@ -392,11 +419,15 @@ experiments.engine::run_dynamic]
 ### Responsibilities By Module
 
 - `banditdl.experiments.hydra_run`
-  - Hydra-to-engine adapter.
-  - Converts composed config into one concrete training call.
+  - Hydra entry point.
+  - Dispatches one composed run to the engine.
+
+- `banditdl.experiments.config_adapter`
+  - Converts composed Hydra config into legacy engine args.
+  - Computes dynamic/fixed run mode, neighbor count, device, and run name.
 
 - `banditdl.experiments.engine`
-  - Per-run execution logic for dynamic/fixed paths (driven by `neighbor_sampler`).
+  - Per-run execution logic for dynamic/fixed paths.
   - Drives training/evaluation loops and persistence.
 
 - `banditdl.core.worker.*`
@@ -409,7 +440,7 @@ experiments.engine::run_dynamic]
   - Dataset loading/partitioning and model construction.
 
 - `banditdl.core.sampling`
-  - Neighbor sampling strategy used by dynamic samplers (`uniform`, `bandit`, `epsilon_greedy`).
+  - Neighbor sampler implementations and reward strategies.
 
 
 ### Terminology: Worker = Node
@@ -453,7 +484,7 @@ flowchart LR
 Interpretation:
 - Each worker is a simulated node with its own local data and model copy.
 - Communication is peer-to-peer, not centralized; each node exchanges updates with selected neighbors.
-- When `neighbor_sampler` is `uniform`/`bandit`/`epsilon_greedy`, neighbor sets are re-sampled each round (`core.sampling`).
+- Dynamic topologies re-sample neighbors each round through `core.sampling`.
 - Received updates pass through Byzantine attack/aggregation logic before updating local state.
 
 ## Sampling / Bandit Hook Points
@@ -462,13 +493,14 @@ Interpretation:
 - `banditdl/experiments/engine.py`
 - `banditdl/core/worker/`
 
-Use the multi-armed bandit sampler (`neighbor_sampler: bandit`):
+Use the epsilon-greedy bandit sampler:
 
 ```bash
 uv run -m banditdl \
-  local=mnist \
-  topology=dynamic_bandit \
-  topology.bandit_epsilon=0.1 \
+  dataset=mnist \
+  topology=dynamic \
+  sampler=bandit \
+  sampler.params.epsilon=0.1 \
   topology.sampling=0.05 \
   seed=0
 ```
@@ -488,4 +520,4 @@ Dynamic runs also save hindsight diagnostics for every sampler, including unifor
 - `selected_neighbors.npy`: sampled neighbors per round and worker.
 - `oracle_neighbors.npy`: best fixed hindsight neighbors per round and worker.
 
-This is intentionally small: sampler choice and bandit parameters are Hydra-controlled, while reward design remains isolated behind the reward strategy API in `banditdl/core/sampling.py`.
+This is intentionally small: sampler choice and sampler-specific parameters are Hydra-controlled, shared runtime facts are passed through `SamplerContext`, and reward design remains isolated behind the reward strategy API in `banditdl/core/sampling.py`.

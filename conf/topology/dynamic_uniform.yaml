@@ -1,3 +1,0 @@
-name: "dynamic_uniform"
-sampling: 0.2
-neighbor_sampler: uniform

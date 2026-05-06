@@ -2,8 +2,8 @@ batch_size: 50
 loss: NLLLoss
 learning_rate: 0.5
 learning_rate_decay: 100
-learning_rate_decay-delta: 500
-weight_decay: 1e-2 
-nb_steps: 2000 # number of steps
-momentum_worker: 0.99 # SGD momentum  
+learning_rate_decay_delta: 500
+weight_decay: 1e-2
+nb_steps: 2000
+momentum_worker: 0.99
 nb_local_steps: 1

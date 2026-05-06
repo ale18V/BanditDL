@@ -1,3 +1,3 @@
-pre-aggregator: nnm # first stage robust aggregation rule before main aggregator. nnm = nearest neighbour
-aggregator: average # real aggregator
-rag: true # robust aggregation flag
+pre-aggregator: nnm
+aggregator: average
+rag: true

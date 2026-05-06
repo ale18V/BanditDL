@@ -1,1 +1,1 @@
-evaluation_delta: 20 # evaluate every X steps
+evaluation_delta: 20

@@ -1,0 +1,5 @@
+name: epsilon_greedy
+reward: parameter_distance
+params:
+  epsilon: 0.1
+  initial_value: 0.0

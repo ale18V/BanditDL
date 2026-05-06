@@ -1,2 +1,2 @@
-alpha: 1 # temperature: alpha = 0 --> ~1 class per node, alpha = inf --> IID per node
-numb_labels: 10 # number of labels in the dataset
+alpha: 100.0
+numb_labels: 10

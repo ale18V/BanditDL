@@ -4,10 +4,10 @@ from pathlib import Path
 
 import hydra
 import optuna
-import torch
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import OmegaConf
 
+from banditdl.experiments.config_adapter import build_engine_config, resolve_device
 from banditdl.experiments.engine import run_dynamic, run_fixed
 from banditdl.utils.plot_sweep_base import (
     build_axis_metadata,
@@ -19,129 +19,24 @@ from banditdl.utils.plot_sweep_base import (
 )
 
 
-def _build_engine_params(cfg):
-    """
-    Convert Hydra config into engine argument dictionary.
-
-    Args:
-      cfg: DictConfig
-        Composed run config.
-
-    return: tuple
-      (engine_params, run_mode)
-    """
-    params = {}
-    nodes = int(cfg.nodes)
-    sampler = str(cfg.topology.neighbor_sampler)
-    is_dynamic = sampler in {"uniform", "bandit", "epsilon_greedy"}
-    if is_dynamic:
-        sampling = float(cfg.topology.sampling)
-        nb_neighbors = max(1, min(nodes - 1, int(round((nodes - 1) * sampling))))
-    else:
-        nb_neighbors = int(cfg.topology.degree)
-
-    # Build params from config groups
-    params["dataset"] = cfg.dataset.dataset
-    params["model"] = cfg.dataset.model
-    params["nb-workers"] = nodes
-    params["dirichlet-alpha"] = float(cfg.heterogeneity.alpha)
-    params["nb-decl-byz"] = int(cfg.adversary.byzcount)
-    params["nb-real-byz"] = int(cfg.adversary.byzcount)
-    params["nb-neighbors"] = nb_neighbors
-    if cfg.adversary.attack is not None:
-        params["attack"] = cfg.adversary.attack
-    params["nb-local-steps"] = int(cfg.optimization.nb_local_steps)
-    params["neighbor-sampler"] = sampler
-    params["bandit-epsilon"] = float(cfg.topology.get("bandit_epsilon"))
-    params["bandit-initial-value"] = float(cfg.topology.get("bandit_initial_value"))
-    params["bandit-reward"] = cfg.topology.get("bandit_reward", "parameter_distance")
-
-    params["batch-size"] = int(cfg.optimization.get("batch_size"))
-    params["loss"] = cfg.optimization.get("loss")
-    params["weight-decay"] = float(cfg.optimization.get("weight_decay"))
-    params["momentum-worker"] = float(cfg.optimization.get("momentum_worker"))
-    params["nb-steps"] = int(cfg.optimization.get("nb_steps"))
-
-    params["aggregator"] = cfg.aggregator.get("aggregator")
-    params["pre-aggregator"] = cfg.aggregator.get("pre_aggregator")
-    params["rag"] = bool(cfg.aggregator.get("rag"))
-
-    params["numb-labels"] = int(cfg.heterogeneity.get("numb_labels"))
-    params["evaluation-delta"] = int(cfg.evaluation.get("evaluation_delta"))
-    byz_budget_raw = cfg.adversary.get("byzantine_budget")
-    byz_budget = int(cfg.adversary.byzcount if byz_budget_raw is None else byz_budget_raw)
-    params["b-hat"] = byz_budget
-
-    if is_dynamic:
-        params["rag"] = True
-        params["sampling-ratio"] = float(cfg.topology.sampling)
-
-    method = cfg.topology.get("method")
-    if not is_dynamic:
-        params["method"] = method or sampler
-
-    return params, "dynamic" if is_dynamic else "fixed"
-
-
-def _pick_device(cfg):
-    """
-    Resolve device string from config.
-
-    Args:
-      cfg: DictConfig
-        Composed run config.
-
-    return: str
-      Torch device string.
-    """
-    configured = str(cfg.device)
-    if configured and configured != "auto":
-        return configured
-    if torch.cuda.is_available():
-        return "cuda"
-    return "cpu"
-
-
-def _read_metric_file_max(metric_file):
-    """
-    Extract best metric value from a result file.
-
-    Args:
-      metric_file: Path
-        Path to metric text file.
-
-    return: float
-      Maximum metric observed in the file.
-    """
+def _read_metric_file_max(metric_file: Path) -> float:
     if not metric_file.exists():
         raise FileNotFoundError(f"Missing metric file: {metric_file}")
 
     metric_values = []
-    lines = metric_file.read_text().splitlines()
-    for line in lines:
+    for line in metric_file.read_text().splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
         fields = stripped.split("\t")
-        if len(fields) < 2:
-            continue
-        metric_values.append(float(fields[1]))
+        if len(fields) >= 2:
+            metric_values.append(float(fields[1]))
     if not metric_values:
         raise ValueError(f"No metric values found in: {metric_file}")
     return max(metric_values)
 
 
-def _resolved_trial_params(trial):
-    """
-    Return effective trial parameters for grid-driven sweeps.
-
-    Args:
-      trial: Trial | FrozenTrial
-        Optuna trial object.
-
-    return: dict
-      Parameter mapping used for this trial.
-    """
+def _resolved_trial_params(trial) -> dict:
     if trial.params:
         return dict(trial.params)
     resolved = trial.user_attrs.get("resolved_params")
@@ -150,28 +45,12 @@ def _resolved_trial_params(trial):
     return {}
 
 
-def _objective(trial, base_cfg, trials_root, axis_lookup, combos):
-    """
-    Execute one trial using fixed parameter assignments.
-
-    Args:
-      trial: Trial
-        Optuna trial instance.
-      base_cfg: DictConfig
-        Base Hydra configuration.
-      trials_root: Path
-        Root folder storing per-trial artifacts.
-      axis_lookup: dict
-        Metadata mapping parameter paths to display attributes.
-      combos: list
-        Ordered list of parameter dictionaries for each trial index.
-
-    return: float
-      Validation accuracy objective.
-    """
+def _objective(trial, base_cfg, trials_root: Path, axis_lookup: dict, combos: list) -> float:
     trial_index = int(trial.number)
     if trial_index >= len(combos):
-        raise IndexError(f"Trial index {trial_index} out of bounds for {len(combos)} combinations")
+        raise IndexError(
+            f"Trial index {trial_index} out of bounds for {len(combos)} combinations"
+        )
     trial_params = dict(combos[trial_index])
 
     trial_cfg = OmegaConf.create(OmegaConf.to_container(base_cfg, resolve=False))
@@ -181,14 +60,14 @@ def _objective(trial, base_cfg, trials_root, axis_lookup, combos):
     folder_name = trial_folder_name(trial_params, axis_lookup)
     trial_result_dir = trials_root / folder_name / "results"
     trial_result_dir.mkdir(parents=True, exist_ok=True)
-    params, run_mode = _build_engine_params(trial_cfg)
-    seed_value = int(trial_cfg.seed) + int(trial.number)
-    device = _pick_device(trial_cfg)
+    run_cfg = build_engine_config(trial_cfg)
+    seed_value = int(trial_cfg.seed) + trial_index
+    device = resolve_device(trial_cfg)
 
-    if run_mode == "dynamic":
-        run_dynamic(params=params, result_dir=trial_result_dir, seed=seed_value, device=device)
+    if run_cfg.run_mode == "dynamic":
+        run_dynamic(params=run_cfg.params, result_dir=trial_result_dir, seed=seed_value, device=device)
     else:
-        run_fixed(params=params, result_dir=trial_result_dir, seed=seed_value, device=device)
+        run_fixed(params=run_cfg.params, result_dir=trial_result_dir, seed=seed_value, device=device)
 
     validation_metric = _read_metric_file_max(trial_result_dir / "validation")
     trial.set_user_attr("validation_accuracy", validation_metric)
@@ -198,21 +77,7 @@ def _objective(trial, base_cfg, trials_root, axis_lookup, combos):
     return validation_metric
 
 
-def _run_best_trial_test_evaluation(best_trial, base_cfg, output_root):
-    """
-    Re-run the best trial with test evaluation enabled.
-
-    Args:
-      best_trial: FrozenTrial
-        Optuna best trial struct.
-      base_cfg: DictConfig
-        Base Hydra configuration.
-      output_root: Path
-        Hydra run output directory.
-
-    return: float
-      Test accuracy from the re-run.
-    """
+def _run_best_trial_test_evaluation(best_trial, base_cfg, output_root: Path) -> float:
     best_params = _resolved_trial_params(best_trial)
     best_cfg = OmegaConf.create(OmegaConf.to_container(base_cfg, resolve=False))
     for param_path, sampled_value in best_params.items():
@@ -220,31 +85,20 @@ def _run_best_trial_test_evaluation(best_trial, base_cfg, output_root):
 
     best_result_dir = output_root / "best_trial_test_eval" / "results"
     best_result_dir.mkdir(parents=True, exist_ok=True)
-    params, run_mode = _build_engine_params(best_cfg)
-    params["evaluate-test"] = True
+    run_cfg = build_engine_config(best_cfg)
+    run_cfg.params["evaluate-test"] = True
     seed_value = int(best_cfg.seed) + int(best_trial.number)
-    device = _pick_device(best_cfg)
+    device = resolve_device(best_cfg)
 
-    if run_mode == "dynamic":
-        run_dynamic(params=params, result_dir=best_result_dir, seed=seed_value, device=device)
+    if run_cfg.run_mode == "dynamic":
+        run_dynamic(params=run_cfg.params, result_dir=best_result_dir, seed=seed_value, device=device)
     else:
-        run_fixed(params=params, result_dir=best_result_dir, seed=seed_value, device=device)
+        run_fixed(params=run_cfg.params, result_dir=best_result_dir, seed=seed_value, device=device)
 
-    test_accuracy = _read_metric_file_max(best_result_dir / "test")
-    return test_accuracy
+    return _read_metric_file_max(best_result_dir / "test")
 
 
-def _metrics_list_from_cfg(cfg):
-    """
-    Normalize plot metric selections from Hydra config.
-
-    Args:
-      cfg: DictConfig
-        User configuration object.
-
-    return: list
-      Metric stems for sweep plots.
-    """
+def _metrics_list_from_cfg(cfg) -> list:
     raw = cfg.get("plot_metrics")
     if raw is None:
         return []
@@ -252,10 +106,7 @@ def _metrics_list_from_cfg(cfg):
 
 
 @hydra.main(version_base=None, config_path="../../conf", config_name="sweep")
-def main(cfg):
-    """
-    Launch categorical grid sweep with Optuna bookkeeping and sweep plots.
-    """
+def main(cfg) -> None:
     output_root = Path(HydraConfig.get().runtime.output_dir)
     trials_root = output_root / "trials"
     trials_root.mkdir(parents=True, exist_ok=True)

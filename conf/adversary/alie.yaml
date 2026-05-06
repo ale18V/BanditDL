@@ -1,5 +1,5 @@
-name: "alie"
+name: alie
 byzcount: 1
 byzantine_budget: 1
 attack: ALIE
-mimic-learning-phase: 400 # optional learning phase for byzantine to mimic
+mimic_learning_phase: 400

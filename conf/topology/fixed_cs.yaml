@@ -1,3 +1,4 @@
-name: "fixed_cs"
+name: fixed_cs
+nodes: 30
 degree: 15
-neighbor_sampler: cs+
+method: cs+

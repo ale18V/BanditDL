@@ -1,25 +1,24 @@
 n_trials: 20
 direction: maximize
+output_dir: .optuna_runs
 search_space:
   heterogeneity.alpha:
     type: float
     low: 0.01
     high: 100.0
     log: true
-  topology.neighbor_sampler:
-    type: categorical
-    choices: [cs+, uniform, bandit]
   topology.sampling:
     type: float
     low: 0.01
     high: 1.0
     log: true
-    when:
-      topology.neighbor_sampler: [uniform, bandit]
-  topology.bandit_epsilon:
+  sampler.name:
+    type: categorical
+    choices: [uniform, epsilon_greedy]
+  sampler.params.epsilon:
     type: float
     low: 0.01
     high: 0.99
     log: true
     when:
-      topology.neighbor_sampler: bandit
+      sampler.name: epsilon_greedy

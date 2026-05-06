@@ -1,19 +1,23 @@
 direction: maximize
+output_dir: .optuna_runs
 search_space:
   heterogeneity.alpha:
-    name: alpha
-    type: categorical
-    choices: [0.1, 0.5]
+    type: float
+    low: 0.01
+    high: 100.0
+    log: true
   topology.sampling:
-    type: categorical
-    choices: [0.01, 0.1]
+    type: float
+    low: 0.01
+    high: 1.0
+    log: true
   sampler.name:
-    name: sampler
     type: categorical
     choices: [uniform, epsilon_greedy]
   sampler.params.epsilon:
-    name: epsilon
-    type: categorical
-    choices: [0.1]
+    type: float
+    low: 0.01
+    high: 0.99
+    log: true
     when:
       sampler.name: epsilon_greedy

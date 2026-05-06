@@ -11,7 +11,11 @@ import torch
 
 from banditdl.utils.math_utils import consensus_drift, neighbor_disagreement
 from banditdl.utils.results import make_result_file, store_result
-from banditdl.core.sampling import make_neighbor_sampler, make_reward_strategy
+from banditdl.core.sampling import (
+    SamplerContext,
+    make_neighbor_sampler,
+    make_reward_strategy,
+)
 from banditdl.core.topology.fxgraph import generate_connected_graph
 from banditdl.core.topology.graph import CommunicationNetwork
 from banditdl.core.worker.byzantine import ByzantineWorker, DecByzantineWorker
@@ -94,6 +98,8 @@ def _make_args(
     args.setdefault("method", "cs+")
     args.setdefault("attack", None)
     args.setdefault("neighbor-sampler", "uniform")
+    args.setdefault("sampler-params", {})
+    args.setdefault("sampler-reward", "parameter_distance")
     args.setdefault("bandit-epsilon", 0.1)
     args.setdefault("bandit-initial-value", 0.0)
     args.setdefault("bandit-reward", "parameter_distance")
@@ -112,13 +118,23 @@ def _make_args(
 def _init_workers_dynamic(args, train_loader_dict, validation_loader):
     workers = []
     for worker_id in range(args.nb_honests):
-        neighbor_sampler = make_neighbor_sampler(
-            args.neighbor_sampler,
-            epsilon=args.bandit_epsilon,
-            initial_value=args.bandit_initial_value,
+        sampler_params = dict(args.sampler_params or {})
+        if args.neighbor_sampler in {"bandit", "epsilon_greedy"}:
+            sampler_params.setdefault("epsilon", args.bandit_epsilon)
+            sampler_params.setdefault("initial_value", args.bandit_initial_value)
+        sampler_context = SamplerContext(
+            worker_id=worker_id,
+            nodes=args.nb_workers,
+            k=args.nb_neighbors,
+            horizon=args.nb_steps,
             seed=args.seed + worker_id,
         )
-        reward_strategy = make_reward_strategy(args.bandit_reward)
+        neighbor_sampler = make_neighbor_sampler(
+            args.neighbor_sampler,
+            context=sampler_context,
+            params=sampler_params,
+        )
+        reward_strategy = make_reward_strategy(args.sampler_reward)
         w = DynamicWorker(
             worker_id,
             train_loader_dict[worker_id],

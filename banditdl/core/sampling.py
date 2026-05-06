@@ -1,8 +1,21 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 import random
+from typing import Any
 
 import torch
-from mabwiser.mab import MAB, LearningPolicy
+from mabwiser.mab import LearningPolicy, MAB
+
+
+@dataclass(frozen=True)
+class SamplerContext:
+    worker_id: int
+    nodes: int
+    k: int
+    horizon: int
+    seed: int
 
 
 class RewardStrategy(ABC):
@@ -41,7 +54,7 @@ class UniformNeighborSampler:
         return None
 
 
-class MultiArmedBanditSampler:
+class EpsilonGreedyNeighborSampler:
     """MABWiser-backed epsilon-greedy neighbor sampler."""
 
     def __init__(self, epsilon=0.1, initial_value=0.0, seed=123456):
@@ -105,9 +118,32 @@ class MultiArmedBanditSampler:
         return None
 
 
-def make_neighbor_sampler(name, **kwargs):
+MultiArmedBanditSampler = EpsilonGreedyNeighborSampler
+
+
+def make_neighbor_sampler(
+    name,
+    *,
+    context: SamplerContext | None = None,
+    params: dict[str, Any] | None = None,
+    **legacy_kwargs,
+):
+    params = dict(params or {})
+    params.update(
+        {key: value for key, value in legacy_kwargs.items() if value is not None}
+    )
+    seed = params.pop("seed", context.seed if context is not None else 123456)
+
     if name == "uniform":
         return UniformNeighborSampler()
     if name in {"bandit", "epsilon_greedy"}:
-        return MultiArmedBanditSampler(**kwargs)
+        epsilon = float(params.pop("epsilon", params.pop("bandit_epsilon", 0.1)))
+        initial_value = float(
+            params.pop("initial_value", params.pop("bandit_initial_value", 0.0))
+        )
+        return EpsilonGreedyNeighborSampler(
+            epsilon=epsilon,
+            initial_value=initial_value,
+            seed=seed,
+        )
     raise ValueError(f"Unknown neighbor sampler: {name}")
