@@ -2,5 +2,5 @@ batch_size: 25
 loss: NLLLoss
 weight_decay: 1e-4
 momentum_worker: 0.9
-nb_steps: 200
+rounds: 200
 nb_local_steps: 1

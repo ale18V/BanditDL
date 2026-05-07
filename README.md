@@ -215,7 +215,7 @@ Optimization configs are in `conf/optimization/`.
 - `learning_rate_decay_delta`: optional step interval for learning-rate decay checks.
 - `weight_decay`: SGD weight decay.
 - `momentum_worker`: worker momentum.
-- `nb_steps`: number of communication/training rounds. This is the sampler horizon.
+- `rounds`: number of communication/training rounds. This is the sampler horizon.
 - `nb_local_steps`: local SGD steps per communication round.
 
 ### Topology Config
@@ -235,7 +235,7 @@ Sampler configs are in `conf/sampler/`. They are used by dynamic topologies.
 - `reward`: reward strategy for learning samplers. Current value: `parameter_distance`.
 - `params`: sampler-specific parameters, for example `epsilon` and `initial_value`.
 
-Shared runtime facts such as `topology.nodes`, sampled-neighbor count, `optimization.nb_steps`, and seed are passed to samplers through runtime context rather than duplicated in sampler config.
+Shared runtime facts such as `topology.nodes`, sampled-neighbor count, `optimization.rounds`, and seed are passed to samplers through runtime context rather than duplicated in sampler config.
 
 ### Adversary Config
 
@@ -542,4 +542,4 @@ The automatic plot `plots/sampler_aggressiveness.png` shows:
 - KL divergence to uniform aggregated across nodes by average, median, min, and max.
 - The global min and max sampler probabilities per round.
 
-This is intentionally small: sampler choice and sampler-specific parameters are Hydra-controlled, shared runtime facts are passed through `SamplerContext`, and reward design remains isolated behind the reward strategy API in `banditdl/core/sampling.py`. For EXP3, `gamma: auto` uses `optimization.nb_steps` as the known horizon.
+This is intentionally small: sampler choice and sampler-specific parameters are Hydra-controlled, shared runtime facts are passed through `SamplerContext`, and reward design remains isolated behind the reward strategy API in `banditdl/core/sampling.py`. For EXP3, `gamma: auto` uses `optimization.rounds` as the known horizon.

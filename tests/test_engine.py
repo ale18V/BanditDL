@@ -18,8 +18,8 @@ class _FakeWorker:
         return 2.0 - self.value
 
 
-def test_final_evaluation_is_recorded_at_nb_steps():
-    args = SimpleNamespace(evaluation_delta=10, nb_steps=2)
+def test_final_evaluation_is_recorded_at_rounds():
+    args = SimpleNamespace(evaluation_delta=10, rounds=2)
     validation_steps = [0]
     validation_accuracies = [[0.1, 0.2]]
     validation_losses = [[0.9, 0.8]]

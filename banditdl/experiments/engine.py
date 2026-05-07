@@ -34,15 +34,15 @@ def _setup_seed(seed: int) -> None:
     torch.backends.cudnn.benchmark = not reproducible
 
 
-def _progress_interval(nb_steps: int) -> int:
-    return max(1, nb_steps // 20)
+def _progress_interval(rounds: int) -> int:
+    return max(1, rounds // 20)
 
 
-def _should_log_step(current_step: int, nb_steps: int) -> bool:
+def _should_log_step(current_step: int, rounds: int) -> bool:
     return (
         current_step == 0
-        or current_step == nb_steps
-        or current_step % _progress_interval(nb_steps) == 0
+        or current_step == rounds
+        or current_step % _progress_interval(rounds) == 0
     )
 
 
@@ -51,14 +51,14 @@ def _log_start(mode: str, args, result_dir: pathlib.Path) -> None:
         f"[banditdl] starting {mode} run: "
         f"dataset={args.dataset}, model={args.model}, nodes={args.nb_workers}, "
         f"honest={args.nb_honests}, byzantine={args.nb_real_byz}, "
-        f"steps={args.nb_steps}, seed={args.seed}, device={args.device}",
+        f"rounds={args.rounds}, seed={args.seed}, device={args.device}",
         flush=True,
     )
     print(f"[banditdl] results: {result_dir}", flush=True)
 
 
 def _log_progress(mode: str, current_step: int, args, accuracy=None, validation_loss=None, train_loss=None) -> None:
-    message = f"[banditdl] {mode} round {current_step}/{args.nb_steps}"
+    message = f"[banditdl] {mode} round {current_step}/{args.rounds}"
     if accuracy is not None:
         message += f" | mean_accuracy={accuracy:.4f}"
     if validation_loss is not None:
@@ -114,14 +114,14 @@ def _record_final_evaluation_if_needed(
 ):
     if args.evaluation_delta <= 0:
         return None, None, None
-    if validation_steps and validation_steps[-1] == args.nb_steps:
+    if validation_steps and validation_steps[-1] == args.rounds:
         return None, None, None
     return _record_evaluation(
         workers,
         fd_validation,
         fd_validation_loss,
         fd_train_loss,
-        args.nb_steps,
+        args.rounds,
         validation_steps,
         validation_accuracies,
         validation_losses,
@@ -168,6 +168,8 @@ def _make_args(
     args["device"] = device
     # normalize dashed keys for existing code style
     normalized = {k.replace("-", "_"): v for k, v in args.items()}
+    if "rounds" not in normalized and "nb_steps" in normalized:
+        normalized["rounds"] = normalized["nb_steps"]
     normalized["nb_honests"] = normalized["nb_workers"] - normalized["nb_real_byz"]
     return SimpleNamespace(**normalized)
 
@@ -183,7 +185,7 @@ def _init_workers_dynamic(args, train_loader_dict, validation_loader):
             worker_id=worker_id,
             nodes=args.nb_workers,
             k=args.nb_neighbors,
-            horizon=args.nb_steps,
+            horizon=args.rounds,
             seed=args.seed + worker_id,
         )
         neighbor_sampler = make_neighbor_sampler(
@@ -334,7 +336,7 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
     sampler_min_probability_history = []
     sampler_max_probability_history = []
 
-    for current_step in range(args.nb_steps):
+    for current_step in range(args.rounds):
         mean_validation_accuracy = None
         mean_validation_loss = None
         mean_train_loss = None
@@ -355,7 +357,7 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
                 train_losses,
             )
 
-        if _should_log_step(current_step, args.nb_steps):
+        if _should_log_step(current_step, args.rounds):
             _log_progress(
                 "dynamic",
                 current_step,
@@ -458,10 +460,10 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
             train_losses,
         )
     )
-    if _should_log_step(args.nb_steps, args.nb_steps):
+    if _should_log_step(args.rounds, args.rounds):
         _log_progress(
             "dynamic",
-            args.nb_steps,
+            args.rounds,
             args,
             final_accuracy,
             final_validation_loss,
@@ -477,7 +479,7 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
         fd_test = (result_dir / "test").open("w")
         make_result_file(fd_test, ["Step number", "Cross-accuracy"])
         test_accuracies = [w.compute_accuracy_on_loader(test_loader) for w in workers]
-        store_result(fd_test, args.nb_steps, sum(test_accuracies) / len(test_accuracies))
+        store_result(fd_test, args.rounds, sum(test_accuracies) / len(test_accuracies))
         fd_test.close()
 
     fd_validation.close()
@@ -644,7 +646,7 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
     train_losses = []
     neighbor_disagreement_history = []
     consensus_drift_history = []
-    for current_step in range(args.nb_steps):
+    for current_step in range(args.rounds):
         mean_validation_accuracy = None
         mean_validation_loss = None
         mean_train_loss = None
@@ -665,7 +667,7 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
                 train_losses,
             )
 
-        if _should_log_step(current_step, args.nb_steps):
+        if _should_log_step(current_step, args.rounds):
             _log_progress(
                 "fixed",
                 current_step,
@@ -732,10 +734,10 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
             train_losses,
         )
     )
-    if _should_log_step(args.nb_steps, args.nb_steps):
+    if _should_log_step(args.rounds, args.rounds):
         _log_progress(
             "fixed",
-            args.nb_steps,
+            args.rounds,
             args,
             final_accuracy,
             final_validation_loss,
@@ -751,7 +753,7 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
         fd_test = (result_dir / "test").open("w")
         make_result_file(fd_test, ["Step number", "Cross-accuracy"])
         test_accuracies = [w.compute_accuracy_on_loader(test_loader) for w in workers]
-        store_result(fd_test, args.nb_steps, sum(test_accuracies) / len(test_accuracies))
+        store_result(fd_test, args.rounds, sum(test_accuracies) / len(test_accuracies))
         fd_test.close()
 
     fd_validation.close()

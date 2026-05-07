@@ -21,7 +21,7 @@ def _base_cfg():
                 "loss": "NLLLoss",
                 "weight_decay": 1e-4,
                 "momentum_worker": 0.9,
-                "nb_steps": 200,
+                "rounds": 200,
                 "nb_local_steps": 1,
             },
             "evaluation": {"evaluation_delta": 20},
@@ -38,7 +38,7 @@ def test_build_dynamic_engine_config_uses_sampler_group():
     assert run_cfg.nb_neighbors == 6
     assert run_cfg.params["neighbor-sampler"] == "epsilon_greedy"
     assert run_cfg.params["sampler-params"] == {"epsilon": 0.1, "initial_value": 0.0}
-    assert run_cfg.params["nb-steps"] == 200
+    assert run_cfg.params["rounds"] == 200
 
 
 def test_build_fixed_engine_config_uses_topology_method():

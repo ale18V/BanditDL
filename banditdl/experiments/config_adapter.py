@@ -105,6 +105,9 @@ def build_engine_config(cfg: DictConfig) -> EngineRunConfig:
     is_dynamic = is_dynamic_topology(cfg.topology)
     nb_neighbors = _neighbor_count(cfg, nodes, is_dynamic)
     sampler = _sampler_name(cfg)
+    rounds = cfg.optimization.get("rounds", cfg.optimization.get("nb_steps"))
+    if rounds is None:
+        raise ValueError("Missing optimization.rounds")
 
     params: dict[str, Any] = {
         "dataset": cfg.dataset.dataset,
@@ -122,7 +125,7 @@ def build_engine_config(cfg: DictConfig) -> EngineRunConfig:
         "loss": cfg.optimization.loss,
         "weight-decay": float(cfg.optimization.weight_decay),
         "momentum-worker": float(cfg.optimization.momentum_worker),
-        "nb-steps": int(cfg.optimization.nb_steps),
+        "rounds": int(rounds),
         "aggregator": cfg.aggregator.aggregator,
         "pre-aggregator": _get(cfg.aggregator, "pre_aggregator", "pre-aggregator"),
         "rag": bool(cfg.aggregator.rag),
