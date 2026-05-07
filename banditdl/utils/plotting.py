@@ -33,9 +33,6 @@ ALL_PLOT_METRICS = (
     "val_accuracy",
     "validation_loss",
     "train_loss",
-    "reward_algorithm",
-    "regret",
-    "normalized_regret",
     "neighbor_disagreement",
     "consensus_drift",
     "sampler_aggressiveness",
@@ -412,6 +409,94 @@ def plot_sampler_aggressiveness(run_dir: Path, output: Path, title: str | None =
     plt.close(fig)
 
 
+def _plot_reward_figure(run_dir: Path, output: Path, title: str) -> None:
+    reward = _load_raw_array(run_dir, "reward_algorithm")
+    oracle = _load_raw_array(run_dir, "reward_oracle")
+    steps = np.arange(len(reward))
+    normalized_reward = np.cumsum(reward, axis=0) / np.arange(1, len(reward) + 1)[:, None]
+    normalized_oracle = np.cumsum(oracle, axis=0) / np.arange(1, len(oracle) + 1)[:, None]
+
+    fig, (ax_raw, ax_norm) = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
+
+    for kind, values in _node_curves(reward):
+        _plot_curve(ax_raw, steps, values, kind, NODE_CURVE_COLORS[kind], NODE_LINESTYLE[kind], kind == "average")
+    _plot_curve(ax_raw, steps, oracle.mean(axis=1), "oracle average", "black", "--", False)
+    ax_raw.set_title("Bandit Reward vs Oracle", pad=18)
+    caption = _extract_run_hparams(title)
+    if caption:
+        ax_raw.text(0.5, 1.01, caption, transform=ax_raw.transAxes, ha="center", va="bottom", fontsize=9)
+    ax_raw.set_ylabel("Reward")
+    ax_raw.grid(True, alpha=0.25)
+    ax_raw.legend(loc="best", ncols=3, frameon=False, fontsize=8)
+
+    for kind, values in _node_curves(normalized_reward):
+        _plot_curve(ax_norm, steps, values, kind, NODE_CURVE_COLORS[kind], NODE_LINESTYLE[kind], kind == "average")
+    _plot_curve(
+        ax_norm,
+        steps,
+        normalized_oracle.mean(axis=1),
+        "oracle average",
+        "black",
+        "--",
+        False,
+    )
+    ax_norm.set_xlabel("Round")
+    ax_norm.set_ylabel("Time-normalized reward")
+    ax_norm.grid(True, alpha=0.25)
+    ax_norm.legend(loc="best", ncols=3, frameon=False, fontsize=8)
+
+    fig.text(
+        0.5,
+        0.01,
+        "Node-wise metrics are aggregated each round across nodes: average, median, max, min.",
+        ha="center",
+        va="bottom",
+        fontsize=8,
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout(rect=(0.0, 0.06, 1.0, 0.97))
+    fig.savefig(output, dpi=160, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_regret_figure(run_dir: Path, output: Path, title: str) -> None:
+    regret = _load_raw_array(run_dir, "regret")
+    normalized_regret = _load_raw_array(run_dir, "normalized_regret")
+    steps = np.arange(len(regret))
+
+    fig, ax = plt.subplots(figsize=(8, 4.6))
+    _plot_curve(ax, steps, regret.mean(axis=1), "regret (avg)", "tab:blue", "-", True)
+    _plot_curve(
+        ax,
+        steps,
+        normalized_regret.mean(axis=1),
+        "normalized regret (avg)",
+        "tab:orange",
+        "--",
+        True,
+    )
+    ax.set_title("Regret", pad=18)
+    caption = _extract_run_hparams(title)
+    if caption:
+        ax.text(0.5, 1.01, caption, transform=ax.transAxes, ha="center", va="bottom", fontsize=9)
+    ax.set_xlabel("Round")
+    ax.set_ylabel("Regret")
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="best", ncols=2, frameon=False, fontsize=8)
+    fig.text(
+        0.5,
+        0.01,
+        "Both curves report node-wise average per round.",
+        ha="center",
+        va="bottom",
+        fontsize=8,
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout(rect=(0.0, 0.08, 1.0, 0.97))
+    fig.savefig(output, dpi=160, bbox_inches="tight")
+    plt.close(fig)
+
+
 def plot_all(run_dir: Path, plots_dir: Path, run_label: str) -> list[Path]:
     """Generate all supported plots for a single run directory.
 
@@ -427,26 +512,33 @@ def plot_all(run_dir: Path, plots_dir: Path, run_label: str) -> list[Path]:
     """
     written_paths: list[Path] = []
     plots_dir.mkdir(parents=True, exist_ok=True)
-    per_node_metrics = set(PER_NODE_METRICS) | {"accuracies"}
-
     for metric in ALL_PLOT_METRICS:
-        stats = ("mean",)
-        for stat in stats:
-            filename = "val_accuracy.png" if metric in {"accuracies", "val_accuracy"} else f"{metric}.png"
-            output = plots_dir / filename
-            try:
-                plot_runs(
-                    run_dirs=[run_dir],
-                    output=output,
-                    metric=metric,
-                    stat=stat,
-                    title=run_label,
-                    labels=[run_label],
-                    aggregate=False,
-                    legend="outside",
-                    max_label_length=48,
-                )
-                written_paths.append(output)
-            except FileNotFoundError:
-                continue
+        filename = "val_accuracy.png" if metric in {"accuracies", "val_accuracy"} else f"{metric}.png"
+        output = plots_dir / filename
+        try:
+            plot_runs(
+                run_dirs=[run_dir],
+                output=output,
+                metric=metric,
+                stat="mean",
+                title=run_label,
+                labels=[run_label],
+                aggregate=False,
+                legend="outside",
+                max_label_length=48,
+            )
+            written_paths.append(output)
+        except FileNotFoundError:
+            continue
+
+    for filename, builder in (
+        ("reward.png", _plot_reward_figure),
+        ("regret.png", _plot_regret_figure),
+    ):
+        output = plots_dir / filename
+        try:
+            builder(run_dir, output, run_label)
+            written_paths.append(output)
+        except FileNotFoundError:
+            continue
     return written_paths
