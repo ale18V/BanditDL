@@ -212,29 +212,19 @@ def _aggregate_series(series: Sequence[tuple[np.ndarray, np.ndarray]]) -> tuple[
     return steps, stacked.mean(axis=0), stacked.std(axis=0)
 
 
-def _add_legend(ax, legend: str, fig) -> None:
+def _add_legend(ax, legend: str) -> None:
+    handles, labels = ax.get_legend_handles_labels()
+    if not handles:
+        return
     if legend == "outside":
-        handles, labels = ax.get_legend_handles_labels()
-        if handles:
-            ax.legend(
-                handles,
-                labels,
-                loc="upper center",
-                bbox_to_anchor=(0.0, -0.21, 1.0, 0.1),
-                mode="expand",
-                ncols=len(handles),
-                frameon=False,
-                fontsize=8,
-                borderaxespad=0.0,
-            )
-        fig.subplots_adjust(bottom=0.27)
+        # Keep "outside" behavior compatible but place legend inside the axes
+        # to avoid overlap with xlabel/captions in compact figures.
+        ax.legend(handles, labels, loc="upper center", ncols=min(4, len(handles)), frameon=False, fontsize=8)
         return
     if legend == "best":
-        ax.legend(fontsize=8)
-        fig.tight_layout()
+        ax.legend(handles, labels, loc="best", fontsize=8)
         return
     if legend == "none":
-        fig.tight_layout()
         return
     raise ValueError(f"Unknown legend placement: {legend}")
 
@@ -328,10 +318,18 @@ def plot_runs(run_dirs: Sequence[Path], output: Path, metric: str, stat: str, ti
         plot_title = f"Aggregate {_display_title(metric)}"
     else:
         plot_title = _display_title(metric)
-    ax.set_title(plot_title)
+    ax.set_title(plot_title, pad=18)
 
     if inferred_caption:
-        fig.text(0.5, 0.985, inferred_caption, ha="center", va="top", fontsize=9)
+        ax.text(
+            0.5,
+            1.01,
+            inferred_caption,
+            transform=ax.transAxes,
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
     if is_per_node:
         fig.text(
             0.5,
@@ -342,7 +340,8 @@ def plot_runs(run_dirs: Sequence[Path], output: Path, metric: str, stat: str, ti
             fontsize=8,
         )
 
-    _add_legend(ax, legend, fig)
+    _add_legend(ax, legend)
+    fig.tight_layout(rect=(0.0, 0.07 if is_per_node else 0.03, 1.0, 0.96))
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, dpi=160, bbox_inches="tight")
     plt.close(fig)
