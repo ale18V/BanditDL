@@ -413,8 +413,9 @@ def _plot_reward_figure(run_dir: Path, output: Path, title: str) -> None:
     reward = _load_raw_array(run_dir, "reward_algorithm")
     oracle = _load_raw_array(run_dir, "reward_oracle")
     steps = np.arange(len(reward))
-    normalized_reward = np.cumsum(reward, axis=0) / np.arange(1, len(reward) + 1)[:, None]
-    normalized_oracle = np.cumsum(oracle, axis=0) / np.arange(1, len(oracle) + 1)[:, None]
+    local_time = np.arange(1, len(reward) + 1, dtype=float)[:, None]
+    normalized_reward = reward / local_time
+    normalized_oracle = oracle / local_time
 
     fig, (ax_raw, ax_norm) = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
 
@@ -464,35 +465,51 @@ def _plot_regret_figure(run_dir: Path, output: Path, title: str) -> None:
     normalized_regret = _load_raw_array(run_dir, "normalized_regret")
     steps = np.arange(len(regret))
 
-    fig, ax = plt.subplots(figsize=(8, 4.6))
-    _plot_curve(ax, steps, regret.mean(axis=1), "regret (avg)", "tab:blue", "-", True)
-    _plot_curve(
-        ax,
-        steps,
-        normalized_regret.mean(axis=1),
-        "normalized regret (avg)",
-        "tab:orange",
-        "--",
-        True,
-    )
-    ax.set_title("Regret", pad=18)
+    fig, (ax_regret, ax_normalized) = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
+    ax_regret.set_title("Regret", pad=18)
     caption = _extract_run_hparams(title)
     if caption:
-        ax.text(0.5, 1.01, caption, transform=ax.transAxes, ha="center", va="bottom", fontsize=9)
-    ax.set_xlabel("Round")
-    ax.set_ylabel("Regret")
-    ax.grid(True, alpha=0.25)
-    ax.legend(loc="best", ncols=2, frameon=False, fontsize=8)
+        ax_regret.text(0.5, 1.01, caption, transform=ax_regret.transAxes, ha="center", va="bottom", fontsize=9)
+
+    for kind, values in _node_curves(regret):
+        _plot_curve(
+            ax_regret,
+            steps,
+            values,
+            kind,
+            NODE_CURVE_COLORS[kind],
+            NODE_LINESTYLE[kind],
+            kind == "average",
+        )
+    ax_regret.set_ylabel("Regret")
+    ax_regret.grid(True, alpha=0.25)
+    ax_regret.legend(loc="best", ncols=4, frameon=False, fontsize=8)
+
+    for kind, values in _node_curves(normalized_regret):
+        _plot_curve(
+            ax_normalized,
+            steps,
+            values,
+            kind,
+            NODE_CURVE_COLORS[kind],
+            NODE_LINESTYLE[kind],
+            kind == "average",
+        )
+    ax_normalized.set_xlabel("Round")
+    ax_normalized.set_ylabel("Normalized regret")
+    ax_normalized.grid(True, alpha=0.25)
+    ax_normalized.legend(loc="best", ncols=4, frameon=False, fontsize=8)
+
     fig.text(
         0.5,
         0.01,
-        "Both curves report node-wise average per round.",
+        "Node-wise metrics are aggregated each round across nodes: average, median, max, min.",
         ha="center",
         va="bottom",
         fontsize=8,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout(rect=(0.0, 0.08, 1.0, 0.97))
+    fig.tight_layout(rect=(0.0, 0.06, 1.0, 0.97))
     fig.savefig(output, dpi=160, bbox_inches="tight")
     plt.close(fig)
 
