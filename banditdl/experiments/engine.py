@@ -192,6 +192,24 @@ def _dynamic_candidate_weights(w, honest_weights, byz_workers, current_step):
     return candidate_weights
 
 
+def _sampler_probability_stats(worker) -> tuple[float, float, float]:
+    population = list(range(worker.nb_honest + worker.nb_byz))
+    population.remove(worker.worker_id)
+    probabilities_by_arm = worker.neighbor_sampler.probabilities(
+        population,
+        worker.nb_neighbors,
+    )
+    probabilities = np.array(
+        [probabilities_by_arm[arm] for arm in population],
+        dtype=float,
+    )
+    uniform_probability = 1.0 / len(population)
+    kl_to_uniform = float(
+        np.sum(probabilities * np.log(np.maximum(probabilities, 1e-12) / uniform_probability))
+    )
+    return kl_to_uniform, float(probabilities.min()), float(probabilities.max())
+
+
 def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) -> None:
     args = _make_args(params, result_dir, seed, device)
     _setup_seed(args.seed)
@@ -254,6 +272,9 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
     oracle_neighbor_history = []
     neighbor_disagreement_history = []
     consensus_drift_history = []
+    sampler_kl_history = []
+    sampler_min_probability_history = []
+    sampler_max_probability_history = []
 
     for current_step in range(args.nb_steps + 1):
         mean_validation_accuracy = None
@@ -290,7 +311,15 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
         selected_round = np.full(
             (args.nb_honests, workers[0].nb_neighbors), -1, dtype=int
         )
+        sampler_kl_round = np.zeros(args.nb_honests)
+        sampler_min_probability_round = np.zeros(args.nb_honests)
+        sampler_max_probability_round = np.zeros(args.nb_honests)
         for w in workers:
+            (
+                sampler_kl_round[w.worker_id],
+                sampler_min_probability_round[w.worker_id],
+                sampler_max_probability_round[w.worker_id],
+            ) = _sampler_probability_stats(w)
             neighbor_indices = w._sample_neighbors()
             candidate_weights = _dynamic_candidate_weights(
                 w, honest_weights, byz_workers, current_step
@@ -335,6 +364,9 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
             consensus = consensus_drift(updated_weights)
         neighbor_disagreement_history.append(disagreement.cpu().numpy())
         consensus_drift_history.append(consensus.cpu().numpy())
+        sampler_kl_history.append(sampler_kl_round)
+        sampler_min_probability_history.append(sampler_min_probability_round)
+        sampler_max_probability_history.append(sampler_max_probability_round)
 
         oracle_neighbors = []
         oracle_rewards_round = []
@@ -396,6 +428,18 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
     np.save(
         os.path.join(result_dir, "consensus_drift.npy"),
         np.array(consensus_drift_history),
+    )
+    np.save(
+        os.path.join(result_dir, "sampler_kl_to_uniform.npy"),
+        np.array(sampler_kl_history),
+    )
+    np.save(
+        os.path.join(result_dir, "sampler_min_probability.npy"),
+        np.array(sampler_min_probability_history),
+    )
+    np.save(
+        os.path.join(result_dir, "sampler_max_probability.npy"),
+        np.array(sampler_max_probability_history),
     )
     _log_done("dynamic")
 

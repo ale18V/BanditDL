@@ -40,6 +40,8 @@ def main() -> None:
             "normalized_regret",
             "neighbor_disagreement",
             "consensus_drift",
+            "sampler_kl_to_uniform",
+            "sampler_aggressiveness",
         ],
         default="val_accuracy",
     )

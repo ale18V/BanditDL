@@ -44,6 +44,20 @@ def test_exp3_sampler_prefers_high_reward_arm():
     assert sampler._probabilities[1] > sampler._probabilities[2]
 
 
+def test_sampler_probability_distributions_sum_to_one():
+    context = SamplerContext(worker_id=0, nodes=4, k=2, horizon=100, seed=1)
+    population = [1, 2, 3]
+
+    for sampler in [
+        make_neighbor_sampler("uniform", context=context),
+        make_neighbor_sampler("epsilon_greedy", context=context),
+        make_neighbor_sampler("exp3", context=context),
+    ]:
+        probabilities = sampler.probabilities(population, k=2)
+        assert sum(probabilities.values()) == pytest.approx(1.0)
+        assert set(probabilities) == set(population)
+
+
 def test_parameter_distance_reward():
     reward = ParameterDistanceReward()
 

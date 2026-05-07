@@ -16,12 +16,18 @@ ARRAY_METRICS = {
     "normalized_regret",
     "neighbor_disagreement",
     "consensus_drift",
+    "sampler_kl_to_uniform",
 }
 REGRET_METRICS = {"regret", "normalized_regret"}
 REWARD_METRICS = {"reward_algorithm", "reward_oracle"}
 DISTANCE_METRICS = {"neighbor_disagreement", "consensus_drift"}
 MAX_METRICS = REGRET_METRICS | DISTANCE_METRICS
-PER_NODE_METRICS = REGRET_METRICS | REWARD_METRICS | DISTANCE_METRICS | {"accuracies", "val_accuracy"}
+PER_NODE_METRICS = (
+    REGRET_METRICS
+    | REWARD_METRICS
+    | DISTANCE_METRICS
+    | {"accuracies", "val_accuracy", "sampler_kl_to_uniform"}
+)
 ALL_PLOT_METRICS = (
     "val_accuracy",
     "validation_loss",
@@ -32,6 +38,7 @@ ALL_PLOT_METRICS = (
     "normalized_regret",
     "neighbor_disagreement",
     "consensus_drift",
+    "sampler_aggressiveness",
 )
 NODE_CURVE_COLORS = {
     "average": "tab:blue",
@@ -135,6 +142,8 @@ def _ylabel(metric: str) -> str:
         return "Neighbor disagreement"
     if metric == "consensus_drift":
         return "Consensus drift"
+    if metric == "sampler_kl_to_uniform":
+        return "KL divergence"
     return "Reward"
 
 
@@ -180,6 +189,12 @@ def _aggregate_series(series: Sequence[tuple[np.ndarray, np.ndarray]]) -> tuple[
 
 
 def plot_runs(run_dirs: Sequence[Path], output: Path, metric: str, stat: str, title: str | None, labels: Sequence[str] | None, aggregate: bool, legend: str, max_label_length: int) -> None:
+    if metric == "sampler_aggressiveness":
+        if len(run_dirs) != 1:
+            raise ValueError("sampler_aggressiveness expects exactly one run directory")
+        plot_sampler_aggressiveness(run_dirs[0], output, title)
+        return
+
     fig, ax = plt.subplots(figsize=(7, 4.5))
     xlabel = "Evaluation index" if metric in {"accuracies", "val_accuracy"} else "Step"
     is_per_node = metric in PER_NODE_METRICS
@@ -257,6 +272,61 @@ def plot_runs(run_dirs: Sequence[Path], output: Path, metric: str, stat: str, ti
     else:
         raise ValueError(f"Unknown legend placement: {legend}")
     output.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output, dpi=160, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_sampler_aggressiveness(run_dir: Path, output: Path, title: str | None = None) -> None:
+    kl = _load_raw_array(run_dir, "sampler_kl_to_uniform")
+    min_probability = _load_raw_array(run_dir, "sampler_min_probability")
+    max_probability = _load_raw_array(run_dir, "sampler_max_probability")
+    steps = np.arange(len(kl))
+
+    fig, (ax_kl, ax_prob) = plt.subplots(
+        2,
+        1,
+        figsize=(8, 7),
+        sharex=True,
+        gridspec_kw={"height_ratios": [2, 1]},
+    )
+
+    for kind, values in _node_curves(kl):
+        _plot_curve(
+            ax_kl,
+            steps,
+            values,
+            kind,
+            NODE_CURVE_COLORS[kind],
+            NODE_LINESTYLE[kind],
+            kind == "average",
+        )
+    ax_kl.set_ylabel("KL(bandit || uniform)")
+    ax_kl.set_title(title or "Sampler aggressiveness")
+    ax_kl.grid(True, alpha=0.25)
+    ax_kl.legend(ncols=4, frameon=False)
+
+    ax_prob.plot(
+        steps,
+        max_probability.max(axis=1),
+        color="tab:red",
+        linewidth=1.7,
+        label="max probability",
+    )
+    ax_prob.plot(
+        steps,
+        min_probability.min(axis=1),
+        color="tab:blue",
+        linewidth=1.7,
+        label="min probability",
+    )
+    ax_prob.set_xlabel("Round")
+    ax_prob.set_ylabel("Probability")
+    ax_prob.set_ylim(0, 1)
+    ax_prob.grid(True, alpha=0.25)
+    ax_prob.legend(ncols=2, frameon=False)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
     fig.savefig(output, dpi=160, bbox_inches="tight")
     plt.close(fig)
 

@@ -358,6 +358,8 @@ Useful options:
 - `--metric reward_algorithm|reward_oracle`: plot cumulative reward curves.
 - `--metric neighbor_disagreement`: plot mean/median/max neighbor disagreement over rounds.
 - `--metric consensus_drift`: plot mean/median/max drift from the global average model.
+- `--metric sampler_aggressiveness`: plot KL to uniform plus min/max sampler probabilities.
+- `--metric sampler_kl_to_uniform`: plot only the KL-to-uniform node aggregates.
 - `--stat mean|worst`: choose mean worker or worst worker; for regret, worst means highest regret.
 - `--legend outside|best|none`: choose legend placement; default keeps it below the plot.
 - `--max-label-length 48`: cap auto-generated labels.
@@ -532,5 +534,12 @@ Dynamic runs also save hindsight diagnostics for every sampler, including unifor
 - `normalized_regret.npy`: regret divided by oracle reward.
 - `selected_neighbors.npy`: sampled neighbors per round and worker.
 - `oracle_neighbors.npy`: best fixed hindsight neighbors per round and worker.
+- `sampler_kl_to_uniform.npy`: per-round, per-node KL divergence from the sampler distribution to uniform.
+- `sampler_min_probability.npy`: per-round, per-node minimum sampler probability.
+- `sampler_max_probability.npy`: per-round, per-node maximum sampler probability.
+
+The automatic plot `plots/sampler_aggressiveness.png` shows:
+- KL divergence to uniform aggregated across nodes by average, median, min, and max.
+- The global min and max sampler probabilities per round.
 
 This is intentionally small: sampler choice and sampler-specific parameters are Hydra-controlled, shared runtime facts are passed through `SamplerContext`, and reward design remains isolated behind the reward strategy API in `banditdl/core/sampling.py`. For EXP3, `gamma: auto` uses `optimization.nb_steps` as the known horizon.

@@ -55,6 +55,13 @@ class UniformNeighborSampler:
     def update(self, population, rewards) -> None:
         return None
 
+    def probabilities(self, population, k=None) -> dict[Any, float]:
+        population = list(population)
+        if not population:
+            return {}
+        probability = 1.0 / len(population)
+        return {arm: probability for arm in population}
+
 
 class EpsilonGreedyNeighborSampler:
     """MABWiser-backed epsilon-greedy neighbor sampler."""
@@ -118,6 +125,27 @@ class EpsilonGreedyNeighborSampler:
             self._ensure_mab(population)
         self._mab.partial_fit(decisions=population, rewards=rewards)
         return None
+
+    def probabilities(self, population, k=None) -> dict[Any, float]:
+        population = list(population)
+        if not population:
+            return {}
+        self._ensure_mab(population)
+        if k is None:
+            k = 1
+        k = max(1, min(int(k), len(population)))
+        exploration = self.epsilon / len(population)
+        probabilities = {arm: exploration for arm in population}
+        expectations = self._mab.predict_expectations()
+        greedy_arms = sorted(
+            population,
+            key=lambda arm: expectations.get(arm, self.initial_value),
+            reverse=True,
+        )[:k]
+        exploitation = (1.0 - self.epsilon) / k
+        for arm in greedy_arms:
+            probabilities[arm] += exploitation
+        return probabilities
 
 
 MultiArmedBanditSampler = EpsilonGreedyNeighborSampler
@@ -206,7 +234,9 @@ class Exp3NeighborSampler:
         rewards = list(rewards)
         if not population:
             return None
-        self._ensure_arms(population)
+        has_unknown_arm = any(arm not in self._arm_to_index for arm in population)
+        if len(self._arms) == 0 or has_unknown_arm:
+            self._ensure_arms(population)
         gamma = self._resolve_gamma(len(self._arms))
         for arm, reward in zip(population, rewards, strict=True):
             arm_index = self._arm_to_index[arm]
@@ -218,6 +248,15 @@ class Exp3NeighborSampler:
             )
         self._refresh_probabilities()
         return None
+
+    def probabilities(self, population, k=None) -> dict[Any, float]:
+        self._ensure_arms(population)
+        if len(self._arms) == 0:
+            return {}
+        return {
+            arm: float(self._probabilities[index])
+            for index, arm in enumerate(self._arms)
+        }
 
 
 # Backwards-compatible alias for older tests/imports.
