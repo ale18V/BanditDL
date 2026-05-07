@@ -14,7 +14,7 @@ def _base_cfg():
                 "params": {"epsilon": 0.1, "initial_value": 0.0},
             },
             "adversary": {"byzcount": 0, "byzantine_budget": 0, "attack": None},
-            "aggregator": {"pre_aggregator": "nnm", "aggregator": "average", "rag": True},
+            "aggregator": {"pre-aggregator": "nnm", "aggregator": "average", "rag": True},
             "heterogeneity": {"alpha": 0.5, "numb_labels": 10},
             "optimization": {
                 "batch_size": 25,

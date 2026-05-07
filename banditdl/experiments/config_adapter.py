@@ -127,7 +127,7 @@ def build_engine_config(cfg: DictConfig) -> EngineRunConfig:
         "momentum-worker": float(cfg.optimization.momentum_worker),
         "rounds": int(rounds),
         "aggregator": cfg.aggregator.aggregator,
-        "pre-aggregator": _get(cfg.aggregator, "pre_aggregator", "pre-aggregator"),
+        "pre-aggregator": _get(cfg.aggregator, "pre-aggregator", "pre_aggregator"),
         "rag": bool(cfg.aggregator.rag),
         "numb-labels": int(cfg.heterogeneity.numb_labels),
         "evaluation-delta": int(cfg.evaluation.evaluation_delta),

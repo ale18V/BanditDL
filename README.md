@@ -249,7 +249,7 @@ Adversary configs are in `conf/adversary/`.
 
 Aggregator configs are in `conf/aggregator/`.
 
-- `pre_aggregator`: optional first-stage robust aggregation rule, commonly `nnm`.
+- `pre-aggregator`: optional first-stage robust aggregation rule, commonly `nnm`.
 - `aggregator`: robust aggregator, commonly `average` or `trmean`.
 - `rag`: robust aggregation flag. Dynamic runs force this to `true`.
 
