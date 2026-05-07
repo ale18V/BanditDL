@@ -321,7 +321,6 @@ def plot_sampler_aggressiveness(run_dir: Path, output: Path, title: str | None =
     )
     ax_prob.set_xlabel("Round")
     ax_prob.set_ylabel("Probability")
-    ax_prob.set_ylim(0, 1)
     ax_prob.grid(True, alpha=0.25)
     ax_prob.legend(ncols=2, frameon=False)
 
