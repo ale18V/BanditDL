@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+import re
 from textwrap import shorten
 
 import matplotlib.pyplot as plt
@@ -33,7 +34,6 @@ ALL_PLOT_METRICS = (
     "validation_loss",
     "train_loss",
     "reward_algorithm",
-    "reward_oracle",
     "regret",
     "normalized_regret",
     "neighbor_disagreement",
@@ -147,9 +147,33 @@ def _ylabel(metric: str) -> str:
     return "Reward"
 
 
-def _node_title_suffix(metric: str) -> str:
-    base = _ylabel(metric)
-    return f"{base} per node - showing average, median, max and min across nodes"
+def _display_title(metric: str) -> str:
+    titles = {
+        "val_accuracy": "Validation Accuracy",
+        "accuracies": "Validation Accuracy",
+        "validation_loss": "Validation Loss",
+        "train_loss": "Training Loss",
+        "reward_algorithm": "Bandit Reward vs Oracle",
+        "reward_oracle": "Oracle Reward",
+        "regret": "Regret",
+        "normalized_regret": "Normalized Regret",
+        "neighbor_disagreement": "Neighbor Disagreement",
+        "consensus_drift": "Consensus Drift",
+        "sampler_kl_to_uniform": "Sampler KL Divergence to Uniform",
+    }
+    return titles.get(metric, metric.replace("_", " ").title())
+
+
+def _extract_run_hparams(label: str) -> str | None:
+    alpha_match = re.search(r"(?:^|-)alpha_([^-\s]+)", label)
+    nodes_match = re.search(r"(?:^|-)n_(\d+)", label)
+    sampling_match = re.search(r"(?:^|-)sampling_([^-\s]+)", label)
+    if not (alpha_match and nodes_match):
+        return None
+    alpha = alpha_match.group(1)
+    nodes = nodes_match.group(1)
+    sampling = sampling_match.group(1) if sampling_match else "NA"
+    return rf"$\alpha$={alpha}, n={nodes}, s={sampling}"
 
 
 def _color_for(index: int) -> str:
@@ -188,6 +212,33 @@ def _aggregate_series(series: Sequence[tuple[np.ndarray, np.ndarray]]) -> tuple[
     return steps, stacked.mean(axis=0), stacked.std(axis=0)
 
 
+def _add_legend(ax, legend: str, fig) -> None:
+    if legend == "outside":
+        handles, labels = ax.get_legend_handles_labels()
+        if handles:
+            ax.legend(
+                handles,
+                labels,
+                loc="upper center",
+                bbox_to_anchor=(0.0, -0.21, 1.0, 0.1),
+                mode="expand",
+                ncols=len(handles),
+                frameon=False,
+                fontsize=8,
+                borderaxespad=0.0,
+            )
+        fig.subplots_adjust(bottom=0.27)
+        return
+    if legend == "best":
+        ax.legend(fontsize=8)
+        fig.tight_layout()
+        return
+    if legend == "none":
+        fig.tight_layout()
+        return
+    raise ValueError(f"Unknown legend placement: {legend}")
+
+
 def plot_runs(run_dirs: Sequence[Path], output: Path, metric: str, stat: str, title: str | None, labels: Sequence[str] | None, aggregate: bool, legend: str, max_label_length: int) -> None:
     if metric == "sampler_aggressiveness":
         if len(run_dirs) != 1:
@@ -211,6 +262,17 @@ def plot_runs(run_dirs: Sequence[Path], output: Path, metric: str, stat: str, ti
                 stacked = np.stack([_node_curves(r[:length])[kind_idx][1] for r in raws])
                 mean = stacked.mean(axis=0)
                 _plot_curve(ax, steps, mean, kind, NODE_CURVE_COLORS[kind], NODE_LINESTYLE[kind], kind == "average")
+            if metric == "reward_algorithm":
+                oracle_means = []
+                for run_dir in run_dirs:
+                    try:
+                        oracle_raw = _load_raw_array(run_dir, "reward_oracle")
+                        oracle_means.append(oracle_raw[:length].mean(axis=1))
+                    except FileNotFoundError:
+                        continue
+                if oracle_means:
+                    oracle_mean = np.stack(oracle_means).mean(axis=0)
+                    _plot_curve(ax, steps, oracle_mean, "oracle average", "black", "--", False)
         else:
             series = [_load_series(run_dir, metric, stat) for run_dir in run_dirs]
             steps, mean, std = _aggregate_series(series)
@@ -230,6 +292,23 @@ def plot_runs(run_dirs: Sequence[Path], output: Path, metric: str, stat: str, ti
                 steps = np.arange(len(raw))
                 for kind, values in _node_curves(raw):
                     _plot_curve(ax, steps, values, kind, NODE_CURVE_COLORS[kind], NODE_LINESTYLE[kind], kind == "average")
+                if metric == "reward_algorithm":
+                    try:
+                        oracle_raw = _load_raw_array(run_dir, "reward_oracle")
+                    except FileNotFoundError:
+                        oracle_raw = None
+                    if oracle_raw is not None:
+                        oracle_steps = np.arange(len(oracle_raw))
+                        oracle_values = oracle_raw.mean(axis=1)
+                        _plot_curve(
+                            ax,
+                            oracle_steps,
+                            oracle_values,
+                            "oracle average",
+                            "black",
+                            "--",
+                            False,
+                        )
             else:
                 steps, values = _load_series(run_dir, metric, stat)
                 _plot_curve(ax, steps, values, base_label, None, "-", True)
@@ -240,37 +319,30 @@ def plot_runs(run_dirs: Sequence[Path], output: Path, metric: str, stat: str, ti
         ax.set_ylim(0, 1)
     ax.grid(True, alpha=0.25)
 
-    if is_per_node:
-        node_suffix = _node_title_suffix(metric)
-        if title:
-            plot_title = f"{title}\n{node_suffix}"
-        elif aggregate:
-            plot_title = f"Aggregate\n{node_suffix}"
-        else:
-            plot_title = node_suffix
-    elif title:
+    inferred_caption = _extract_run_hparams(title or "")
+    if title and not inferred_caption:
         plot_title = title
+    elif title:
+        plot_title = _display_title(metric)
     elif aggregate:
-        plot_title = "Aggregate"
+        plot_title = f"Aggregate {_display_title(metric)}"
     else:
-        plot_title = "Result comparison"
+        plot_title = _display_title(metric)
     ax.set_title(plot_title)
 
-    if legend == "outside":
-        ax.legend(
-            loc="upper center",
-            bbox_to_anchor=(0.5, -0.18),
-            ncols=min(3, max(1, len(ax.lines))),
-            frameon=False,
+    if inferred_caption:
+        fig.text(0.5, 0.985, inferred_caption, ha="center", va="top", fontsize=9)
+    if is_per_node:
+        fig.text(
+            0.5,
+            0.01,
+            "Node-wise metrics are aggregated each round across nodes: average, median, max, min.",
+            ha="center",
+            va="bottom",
+            fontsize=8,
         )
-        fig.subplots_adjust(bottom=0.28)
-    elif legend == "best":
-        ax.legend()
-        fig.tight_layout()
-    elif legend == "none":
-        fig.tight_layout()
-    else:
-        raise ValueError(f"Unknown legend placement: {legend}")
+
+    _add_legend(ax, legend, fig)
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, dpi=160, bbox_inches="tight")
     plt.close(fig)
