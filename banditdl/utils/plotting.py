@@ -372,7 +372,18 @@ def plot_sampler_aggressiveness(run_dir: Path, output: Path, title: str | None =
             kind == "average",
         )
     ax_kl.set_ylabel("KL(bandit || uniform)")
-    ax_kl.set_title(title or "Sampler aggressiveness")
+    ax_kl.set_title("Sampler Aggressiveness", pad=18)
+    caption = _extract_run_hparams(title or "")
+    if caption:
+        ax_kl.text(
+            0.5,
+            1.01,
+            caption,
+            transform=ax_kl.transAxes,
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
     ax_kl.grid(True, alpha=0.25)
     ax_kl.legend(ncols=4, frameon=False)
 
