@@ -68,18 +68,18 @@ class FixedGraphWorker(HonestWorker):
         self.dissensus = dissensus
         self.rho = 1.0
         self.W = torch.tensor(LaplacianGossipMatrix(self.comm_graph)).to(device)
+        self.nb_neighbors = len(list(self.comm_graph.neighbors(self.worker_id)))
 
         self.robust_aggregator = RobustAggregator(
             aggregator,
             pre_aggregator,
             server_clip,
-            nb_neighbors + 1 - b_hat,
+            self.nb_neighbors + 1 - b_hat,
             b_hat,
             bucket_size,
             self.model_size,
             self.device,
         )
-        self.nb_neighbors = len(list(self.comm_graph.neighbors(self.worker_id)))
 
         metropolis = True
         if metropolis:

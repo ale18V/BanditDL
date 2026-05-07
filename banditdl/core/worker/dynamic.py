@@ -79,7 +79,7 @@ class DynamicWorker(HonestWorker):
             aggregator,
             pre_aggregator,
             server_clip,
-            nb_neighbors + 1 - b_hat,
+            self.nb_neighbors + 1 - b_hat,
             b_hat,
             bucket_size,
             self.model_size,

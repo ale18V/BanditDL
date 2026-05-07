@@ -72,6 +72,63 @@ def _log_done(mode: str) -> None:
     print(f"[banditdl] finished {mode} run", flush=True)
 
 
+def _record_evaluation(
+    workers,
+    fd_validation,
+    fd_validation_loss,
+    fd_train_loss,
+    current_step,
+    validation_steps,
+    validation_accuracies,
+    validation_losses,
+    train_losses,
+):
+    accs = [w.compute_validation_accuracy() for w in workers]
+    validation_losses_round = [w.compute_validation_loss() for w in workers]
+    train_losses_round = [w.compute_train_loss() for w in workers]
+    mean_validation_accuracy = sum(accs) / len(accs)
+    mean_validation_loss = sum(validation_losses_round) / len(validation_losses_round)
+    mean_train_loss = sum(train_losses_round) / len(train_losses_round)
+
+    validation_steps.append(current_step)
+    validation_accuracies.append(accs)
+    validation_losses.append(validation_losses_round)
+    train_losses.append(train_losses_round)
+    store_result(fd_validation, current_step, mean_validation_accuracy)
+    store_result(fd_validation_loss, current_step, mean_validation_loss)
+    store_result(fd_train_loss, current_step, mean_train_loss)
+
+    return mean_validation_accuracy, mean_validation_loss, mean_train_loss
+
+
+def _record_final_evaluation_if_needed(
+    args,
+    workers,
+    fd_validation,
+    fd_validation_loss,
+    fd_train_loss,
+    validation_steps,
+    validation_accuracies,
+    validation_losses,
+    train_losses,
+):
+    if args.evaluation_delta <= 0:
+        return None, None, None
+    if validation_steps and validation_steps[-1] == args.nb_steps:
+        return None, None, None
+    return _record_evaluation(
+        workers,
+        fd_validation,
+        fd_validation_loss,
+        fd_train_loss,
+        args.nb_steps,
+        validation_steps,
+        validation_accuracies,
+        validation_losses,
+        train_losses,
+    )
+
+
 def _make_args(
     params: dict, result_dir: pathlib.Path, seed: int, device: str
 ) -> SimpleNamespace:
@@ -261,6 +318,7 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
     make_result_file(fd_validation_loss, ["Step number", "Cross-loss"])
     make_result_file(fd_train_loss, ["Step number", "Cross-loss"])
 
+    validation_steps = []
     validation_accuracies = []
     validation_losses = []
     train_losses = []
@@ -276,23 +334,26 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
     sampler_min_probability_history = []
     sampler_max_probability_history = []
 
-    for current_step in range(args.nb_steps + 1):
+    for current_step in range(args.nb_steps):
         mean_validation_accuracy = None
         mean_validation_loss = None
         mean_train_loss = None
         if args.evaluation_delta > 0 and current_step % args.evaluation_delta == 0:
-            accs = [w.compute_validation_accuracy() for w in workers]
-            validation_losses_round = [w.compute_validation_loss() for w in workers]
-            train_losses_round = [w.compute_train_loss() for w in workers]
-            mean_validation_accuracy = sum(accs) / len(accs)
-            mean_validation_loss = sum(validation_losses_round) / len(validation_losses_round)
-            mean_train_loss = sum(train_losses_round) / len(train_losses_round)
-            validation_accuracies.append(accs)
-            validation_losses.append(validation_losses_round)
-            train_losses.append(train_losses_round)
-            store_result(fd_validation, current_step, mean_validation_accuracy)
-            store_result(fd_validation_loss, current_step, mean_validation_loss)
-            store_result(fd_train_loss, current_step, mean_train_loss)
+            (
+                mean_validation_accuracy,
+                mean_validation_loss,
+                mean_train_loss,
+            ) = _record_evaluation(
+                workers,
+                fd_validation,
+                fd_validation_loss,
+                fd_train_loss,
+                current_step,
+                validation_steps,
+                validation_accuracies,
+                validation_losses,
+                train_losses,
+            )
 
         if _should_log_step(current_step, args.nb_steps):
             _log_progress(
@@ -384,16 +445,45 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
         selected_neighbor_history.append(selected_round)
         oracle_neighbor_history.append(np.stack(oracle_neighbors))
 
+    final_accuracy, final_validation_loss, final_train_loss = (
+        _record_final_evaluation_if_needed(
+            args,
+            workers,
+            fd_validation,
+            fd_validation_loss,
+            fd_train_loss,
+            validation_steps,
+            validation_accuracies,
+            validation_losses,
+            train_losses,
+        )
+    )
+    if _should_log_step(args.nb_steps, args.nb_steps):
+        _log_progress(
+            "dynamic",
+            args.nb_steps,
+            args,
+            final_accuracy,
+            final_validation_loss,
+            final_train_loss,
+        )
+
     if validation_accuracies:
         worst_idx = min(range(len(workers)), key=lambda i: validation_accuracies[-1][i])
-        for i, accs in enumerate(validation_accuracies):
-            store_result(fd_validation_worst, i * args.evaluation_delta, accs[worst_idx])
+        for step, accs in zip(validation_steps, validation_accuracies, strict=True):
+            store_result(fd_validation_worst, step, accs[worst_idx])
 
     if args.evaluate_test:
         fd_test = (result_dir / "test").open("w")
         make_result_file(fd_test, ["Step number", "Cross-accuracy"])
         test_accuracies = [w.compute_accuracy_on_loader(test_loader) for w in workers]
         store_result(fd_test, args.nb_steps, sum(test_accuracies) / len(test_accuracies))
+        fd_test.close()
+
+    fd_validation.close()
+    fd_validation_worst.close()
+    fd_validation_loss.close()
+    fd_train_loss.close()
 
     algorithm_rewards = np.array(algorithm_reward_history)
     oracle_rewards = np.array(oracle_reward_history)
@@ -548,28 +638,32 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
     make_result_file(fd_validation_loss, ["Step number", "Cross-loss"])
     make_result_file(fd_train_loss, ["Step number", "Cross-loss"])
 
+    validation_steps = []
     validation_accuracies = []
     validation_losses = []
     train_losses = []
     neighbor_disagreement_history = []
     consensus_drift_history = []
-    for current_step in range(args.nb_steps + 1):
+    for current_step in range(args.nb_steps):
         mean_validation_accuracy = None
         mean_validation_loss = None
         mean_train_loss = None
         if args.evaluation_delta > 0 and current_step % args.evaluation_delta == 0:
-            accs = [w.compute_validation_accuracy() for w in workers]
-            validation_losses_round = [w.compute_validation_loss() for w in workers]
-            train_losses_round = [w.compute_train_loss() for w in workers]
-            mean_validation_accuracy = sum(accs) / len(accs)
-            mean_validation_loss = sum(validation_losses_round) / len(validation_losses_round)
-            mean_train_loss = sum(train_losses_round) / len(train_losses_round)
-            validation_accuracies.append(accs)
-            validation_losses.append(validation_losses_round)
-            train_losses.append(train_losses_round)
-            store_result(fd_validation, current_step, mean_validation_accuracy)
-            store_result(fd_validation_loss, current_step, mean_validation_loss)
-            store_result(fd_train_loss, current_step, mean_train_loss)
+            (
+                mean_validation_accuracy,
+                mean_validation_loss,
+                mean_train_loss,
+            ) = _record_evaluation(
+                workers,
+                fd_validation,
+                fd_validation_loss,
+                fd_train_loss,
+                current_step,
+                validation_steps,
+                validation_accuracies,
+                validation_losses,
+                train_losses,
+            )
 
         if _should_log_step(current_step, args.nb_steps):
             _log_progress(
@@ -606,10 +700,10 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
             else:
                 byz_weights = (
                     [
-                        byz_workers[byz_neighbors[0]].pull(
+                        byz_workers[byz_neighbor].pull(
                             {"honest_weights": honest_weights, "step": current_step}
                         )
-                        for _ in byz_neighbors
+                        for byz_neighbor in byz_neighbors
                     ]
                     if byz_neighbors
                     else []
@@ -625,16 +719,45 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
         neighbor_disagreement_history.append(disagreement.cpu().numpy())
         consensus_drift_history.append(consensus.cpu().numpy())
 
+    final_accuracy, final_validation_loss, final_train_loss = (
+        _record_final_evaluation_if_needed(
+            args,
+            workers,
+            fd_validation,
+            fd_validation_loss,
+            fd_train_loss,
+            validation_steps,
+            validation_accuracies,
+            validation_losses,
+            train_losses,
+        )
+    )
+    if _should_log_step(args.nb_steps, args.nb_steps):
+        _log_progress(
+            "fixed",
+            args.nb_steps,
+            args,
+            final_accuracy,
+            final_validation_loss,
+            final_train_loss,
+        )
+
     if validation_accuracies:
         worst_idx = min(range(len(workers)), key=lambda i: validation_accuracies[-1][i])
-        for i, accs in enumerate(validation_accuracies):
-            store_result(fd_validation_worst, i * args.evaluation_delta, accs[worst_idx])
+        for step, accs in zip(validation_steps, validation_accuracies, strict=True):
+            store_result(fd_validation_worst, step, accs[worst_idx])
 
     if args.evaluate_test:
         fd_test = (result_dir / "test").open("w")
         make_result_file(fd_test, ["Step number", "Cross-accuracy"])
         test_accuracies = [w.compute_accuracy_on_loader(test_loader) for w in workers]
         store_result(fd_test, args.nb_steps, sum(test_accuracies) / len(test_accuracies))
+        fd_test.close()
+
+    fd_validation.close()
+    fd_validation_worst.close()
+    fd_validation_loss.close()
+    fd_train_loss.close()
 
     np.save(os.path.join(result_dir, "validation_accuracies.npy"), np.array(validation_accuracies))
     np.save(os.path.join(result_dir, "accuracies.npy"), np.array(validation_accuracies))

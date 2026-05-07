@@ -176,6 +176,12 @@ def get_vector_scores(vectors, nb_byz, distances):
 
 def average_nearest_neighbors(vectors, f, pivot=None):
     """Compute the average of the n-f closest vectors to pivot."""
+    if isinstance(vectors, torch.Tensor):
+        vectors = list(torch.unbind(vectors))
+    if pivot is None:
+        return torch.stack(
+            [average_nearest_neighbors(vectors, f, vector) for vector in vectors]
+        )
     vector_scores = list()
     
     for i in range(len(vectors)):
