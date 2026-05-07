@@ -185,7 +185,7 @@ def _init_workers_dynamic(args, train_loader_dict, validation_loader):
             worker_id=worker_id,
             nodes=args.nb_workers,
             k=args.nb_neighbors,
-            horizon=args.rounds,
+            horizon=args.rounds + 1,
             seed=args.seed + worker_id,
         )
         neighbor_sampler = make_neighbor_sampler(
@@ -336,7 +336,7 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
     sampler_min_probability_history = []
     sampler_max_probability_history = []
 
-    for current_step in range(args.rounds):
+    for current_step in range(args.rounds + 1):
         mean_validation_accuracy = None
         mean_validation_loss = None
         mean_train_loss = None
@@ -646,7 +646,7 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
     train_losses = []
     neighbor_disagreement_history = []
     consensus_drift_history = []
-    for current_step in range(args.rounds):
+    for current_step in range(args.rounds + 1):
         mean_validation_accuracy = None
         mean_validation_loss = None
         mean_train_loss = None
