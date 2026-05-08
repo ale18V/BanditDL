@@ -65,6 +65,9 @@ def _load_raw_array(run_dir: Path, metric: str) -> np.ndarray:
         "val_accuracy": ("validation_accuracies", "accuracies"),
         "accuracies": ("validation_accuracies", "accuracies"),
     }
+    if metric == "normalized_regret":
+        regret = _load_raw_array(run_dir, "regret")
+        return _time_normalize(regret)
     candidate_names = metric_aliases.get(metric, (metric,))
     path = None
     for metric_name in candidate_names:
@@ -82,9 +85,81 @@ def _load_raw_array(run_dir: Path, metric: str) -> np.ndarray:
     return values_by_worker
 
 
+def _time_normalize(values: np.ndarray) -> np.ndarray:
+    local_time = np.arange(1, len(values) + 1, dtype=float)[:, None]
+    return np.divide(
+        values,
+        local_time,
+        out=np.full_like(values, np.nan),
+        where=np.isfinite(values),
+    )
+
+
+def _load_full_round_steps(run_dir: Path) -> np.ndarray:
+    for name in (
+        "neighbor_disagreement.npy",
+        "consensus_drift.npy",
+        "reward_algorithm.npy",
+        "regret.npy",
+        "sampler_kl_to_uniform.npy",
+    ):
+        path = run_dir / name
+        if path.exists():
+            return np.arange(np.load(path).shape[0])
+    for name in ("validation", "eval"):
+        path = run_dir / name
+        if path.exists():
+            steps, _ = _read_eval(path)
+            if steps.size:
+                return np.arange(int(np.max(steps)) + 1)
+    raise FileNotFoundError("Could not infer full round axis from run artifacts")
+
+
+def _load_eval_steps(run_dir: Path) -> np.ndarray:
+    for name in ("validation", "eval"):
+        path = run_dir / name
+        if path.exists():
+            steps, _ = _read_eval(path)
+            return steps
+    raise FileNotFoundError(run_dir / "validation")
+
+
+def _interpolate_to_steps(
+    values_by_worker: np.ndarray,
+    source_steps: np.ndarray,
+    target_steps: np.ndarray,
+) -> np.ndarray:
+    if source_steps.shape[0] != values_by_worker.shape[0]:
+        return values_by_worker
+    if source_steps.shape[0] == target_steps.shape[0] and np.allclose(source_steps, target_steps):
+        return values_by_worker
+    if source_steps.shape[0] == 1:
+        return np.repeat(values_by_worker, repeats=target_steps.shape[0], axis=0)
+
+    out = np.zeros((target_steps.shape[0], values_by_worker.shape[1]), dtype=float)
+    for worker_id in range(values_by_worker.shape[1]):
+        out[:, worker_id] = np.interp(
+            target_steps,
+            source_steps,
+            values_by_worker[:, worker_id],
+        )
+    return out
+
+
+def _load_per_node_series(run_dir: Path, metric: str) -> tuple[np.ndarray, np.ndarray]:
+    raw = _load_raw_array(run_dir, metric)
+    steps = np.arange(raw.shape[0])
+    if metric in {"accuracies", "val_accuracy"}:
+        source_steps = _load_eval_steps(run_dir)
+        target_steps = _load_full_round_steps(run_dir)
+        raw = _interpolate_to_steps(raw, source_steps, target_steps)
+        steps = target_steps
+    return steps, raw
+
+
 def _load_series(run_dir: Path, metric: str, stat: str) -> tuple[np.ndarray, np.ndarray]:
     if metric in ARRAY_METRICS:
-        values_by_worker = _load_raw_array(run_dir, metric)
+        steps, values_by_worker = _load_per_node_series(run_dir, metric)
         if stat == "mean":
             values = values_by_worker.mean(axis=1)
         elif stat == "worst":
@@ -92,7 +167,7 @@ def _load_series(run_dir: Path, metric: str, stat: str) -> tuple[np.ndarray, np.
             values = reducer(values_by_worker, axis=1)
         else:
             raise ValueError(f"unsupported stat for {metric}: {stat}")
-        return np.arange(len(values)), values
+        return steps, values
 
     metric_aliases = {
         "eval": ("validation", "eval"),
@@ -190,6 +265,23 @@ def _plot_curve(ax, steps: np.ndarray, values: np.ndarray, label: str, color: st
     )
 
 
+def _mark_first_nonfinite(ax, steps: np.ndarray, values: np.ndarray) -> None:
+    finite = np.isfinite(values)
+    if finite.all():
+        return
+    first_bad = int(np.flatnonzero(~finite)[0])
+    ax.axvline(steps[first_bad], color="black", linestyle=":", linewidth=1)
+    ax.text(
+        steps[first_bad],
+        0.98,
+        "NaN",
+        transform=ax.get_xaxis_transform(),
+        ha="left",
+        va="top",
+        fontsize=8,
+    )
+
+
 def _default_label(run_dir: Path, max_length: int) -> str:
     tokens = run_dir.name.split("-")
     keep_prefixes = ("sampling_", "degree_", "sampler_", "eps_", "init_", "seed_")
@@ -234,19 +326,21 @@ def plot_runs(run_dirs: Sequence[Path], output: Path, metric: str, stat: str, ti
         return
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    xlabel = "Evaluation index" if metric in {"accuracies", "val_accuracy"} else "Step"
+    xlabel = "Round"
     is_per_node = metric in PER_NODE_METRICS
 
     if aggregate:
         if is_per_node:
-            raws = [_load_raw_array(run_dir, metric) for run_dir in run_dirs]
-            length = min(len(r) for r in raws)
+            series = [_load_per_node_series(run_dir, metric) for run_dir in run_dirs]
+            length = min(len(raw) for _, raw in series)
             if length == 0:
                 raise ValueError("cannot aggregate empty per-node series")
-            steps = np.arange(length)
-            template = _node_curves(raws[0][:length])
+            steps = series[0][0][:length]
+            template = _node_curves(series[0][1][:length])
             for kind_idx, (kind, _) in enumerate(template):
-                stacked = np.stack([_node_curves(r[:length])[kind_idx][1] for r in raws])
+                stacked = np.stack(
+                    [_node_curves(raw[:length])[kind_idx][1] for _, raw in series]
+                )
                 mean = stacked.mean(axis=0)
                 _plot_curve(ax, steps, mean, kind, NODE_CURVE_COLORS[kind], NODE_LINESTYLE[kind], kind == "average")
             if metric == "reward_algorithm":
@@ -275,8 +369,7 @@ def plot_runs(run_dirs: Sequence[Path], output: Path, metric: str, stat: str, ti
             base_label = shorten(base_label, width=max_label_length, placeholder="...")
 
             if is_per_node:
-                raw = _load_raw_array(run_dir, metric)
-                steps = np.arange(len(raw))
+                steps, raw = _load_per_node_series(run_dir, metric)
                 for kind, values in _node_curves(raw):
                     _plot_curve(ax, steps, values, kind, NODE_CURVE_COLORS[kind], NODE_LINESTYLE[kind], kind == "average")
                 if metric == "reward_algorithm":
@@ -304,14 +397,12 @@ def plot_runs(run_dirs: Sequence[Path], output: Path, metric: str, stat: str, ti
     ax.set_ylabel(_ylabel(metric))
     if metric in {"accuracies", "val_accuracy", "validation", "validation_worst", "test", "eval", "eval_worst"}:
         ax.set_ylim(0, 1)
+    for line in list(ax.lines):
+        _mark_first_nonfinite(ax, line.get_xdata(), line.get_ydata())
     ax.grid(True, alpha=0.25)
 
     inferred_caption = _extract_run_hparams(title or "")
-    if title and not inferred_caption:
-        plot_title = title
-    elif title:
-        plot_title = _display_title(metric)
-    elif aggregate:
+    if aggregate:
         plot_title = f"Aggregate {_display_title(metric)}"
     else:
         plot_title = _display_title(metric)
@@ -382,6 +473,8 @@ def plot_sampler_aggressiveness(run_dir: Path, output: Path, title: str | None =
             fontsize=9,
         )
     ax_kl.grid(True, alpha=0.25)
+    for line in list(ax_kl.lines):
+        _mark_first_nonfinite(ax_kl, line.get_xdata(), line.get_ydata())
     ax_kl.legend(ncols=4, frameon=False)
 
     ax_prob.plot(
@@ -401,6 +494,8 @@ def plot_sampler_aggressiveness(run_dir: Path, output: Path, title: str | None =
     ax_prob.set_xlabel("Round")
     ax_prob.set_ylabel("Probability")
     ax_prob.grid(True, alpha=0.25)
+    for line in list(ax_prob.lines):
+        _mark_first_nonfinite(ax_prob, line.get_xdata(), line.get_ydata())
     ax_prob.legend(ncols=2, frameon=False)
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -428,6 +523,8 @@ def _plot_reward_figure(run_dir: Path, output: Path, title: str) -> None:
         ax_raw.text(0.5, 1.01, caption, transform=ax_raw.transAxes, ha="center", va="bottom", fontsize=9)
     ax_raw.set_ylabel("Reward")
     ax_raw.grid(True, alpha=0.25)
+    for line in list(ax_raw.lines):
+        _mark_first_nonfinite(ax_raw, line.get_xdata(), line.get_ydata())
     ax_raw.legend(loc="best", ncols=3, frameon=False, fontsize=8)
 
     for kind, values in _node_curves(normalized_reward):
@@ -444,6 +541,8 @@ def _plot_reward_figure(run_dir: Path, output: Path, title: str) -> None:
     ax_norm.set_xlabel("Round")
     ax_norm.set_ylabel("Time-normalized reward")
     ax_norm.grid(True, alpha=0.25)
+    for line in list(ax_norm.lines):
+        _mark_first_nonfinite(ax_norm, line.get_xdata(), line.get_ydata())
     ax_norm.legend(loc="best", ncols=3, frameon=False, fontsize=8)
 
     fig.text(
@@ -462,7 +561,7 @@ def _plot_reward_figure(run_dir: Path, output: Path, title: str) -> None:
 
 def _plot_regret_figure(run_dir: Path, output: Path, title: str) -> None:
     regret = _load_raw_array(run_dir, "regret")
-    normalized_regret = _load_raw_array(run_dir, "normalized_regret")
+    normalized_regret = _time_normalize(regret)
     steps = np.arange(len(regret))
 
     fig, (ax_regret, ax_normalized) = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
@@ -483,6 +582,8 @@ def _plot_regret_figure(run_dir: Path, output: Path, title: str) -> None:
         )
     ax_regret.set_ylabel("Regret")
     ax_regret.grid(True, alpha=0.25)
+    for line in list(ax_regret.lines):
+        _mark_first_nonfinite(ax_regret, line.get_xdata(), line.get_ydata())
     ax_regret.legend(loc="best", ncols=4, frameon=False, fontsize=8)
 
     for kind, values in _node_curves(normalized_regret):
@@ -498,6 +599,8 @@ def _plot_regret_figure(run_dir: Path, output: Path, title: str) -> None:
     ax_normalized.set_xlabel("Round")
     ax_normalized.set_ylabel("Normalized regret")
     ax_normalized.grid(True, alpha=0.25)
+    for line in list(ax_normalized.lines):
+        _mark_first_nonfinite(ax_normalized, line.get_xdata(), line.get_ydata())
     ax_normalized.legend(loc="best", ncols=4, frameon=False, fontsize=8)
 
     fig.text(

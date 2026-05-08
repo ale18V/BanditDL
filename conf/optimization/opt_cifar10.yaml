@@ -1,5 +1,5 @@
 batch_size: 50
-loss: NLLLoss
+loss: CrossEntropyLoss
 learning_rate: 0.5
 learning_rate_decay: 100
 learning_rate_decay_delta: 500

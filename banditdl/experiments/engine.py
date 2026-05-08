@@ -72,6 +72,16 @@ def _log_done(mode: str) -> None:
     print(f"[banditdl] finished {mode} run", flush=True)
 
 
+def _raise_if_nonfinite_weights(workers, current_step: int, mode: str) -> None:
+    for worker in workers:
+        weights = worker.pull(None)
+        if not torch.isfinite(weights).all():
+            raise FloatingPointError(
+                f"{mode} produced non-finite weights at round {current_step} "
+                f"for worker {worker.worker_id}"
+            )
+
+
 def _record_evaluation(
     workers,
     fd_validation,
@@ -419,6 +429,7 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
 
         with torch.no_grad():
             updated_weights = [w.pull(None) for w in workers]
+            _raise_if_nonfinite_weights(workers, current_step, "dynamic")
             neighbor_matrix = selected_round.copy()
             neighbor_matrix[neighbor_matrix >= args.nb_honests] = -1
             disagreement = neighbor_disagreement(
@@ -490,12 +501,6 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
     algorithm_rewards = np.array(algorithm_reward_history)
     oracle_rewards = np.array(oracle_reward_history)
     regret = oracle_rewards - algorithm_rewards
-    normalized_regret = np.divide(
-        regret,
-        np.maximum(oracle_rewards, 1e-12),
-        out=np.zeros_like(regret),
-        where=oracle_rewards > 0,
-    )
 
     np.save(os.path.join(result_dir, "validation_accuracies.npy"), np.array(validation_accuracies))
     np.save(os.path.join(result_dir, "accuracies.npy"), np.array(validation_accuracies))
@@ -504,7 +509,6 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
     np.save(os.path.join(result_dir, "reward_algorithm.npy"), algorithm_rewards)
     np.save(os.path.join(result_dir, "reward_oracle.npy"), oracle_rewards)
     np.save(os.path.join(result_dir, "regret.npy"), regret)
-    np.save(os.path.join(result_dir, "normalized_regret.npy"), normalized_regret)
     np.save(
         os.path.join(result_dir, "selected_neighbors.npy"),
         np.array(selected_neighbor_history, dtype=int),
@@ -714,6 +718,7 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
 
         with torch.no_grad():
             updated_weights = [w.pull(None) for w in workers]
+            _raise_if_nonfinite_weights(workers, current_step, "fixed")
             disagreement = neighbor_disagreement(
                 updated_weights, adjacency=adjacency_honest
             )
