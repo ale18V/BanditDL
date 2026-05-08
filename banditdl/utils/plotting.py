@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 import re
 from textwrap import shorten
@@ -8,35 +9,19 @@ from textwrap import shorten
 import matplotlib.pyplot as plt
 import numpy as np
 
-ARRAY_METRICS = {
-    "accuracies",
-    "val_accuracy",
-    "reward_algorithm",
-    "reward_oracle",
-    "regret",
-    "normalized_regret",
-    "neighbor_disagreement",
-    "consensus_drift",
-    "sampler_kl_to_uniform",
-}
-REGRET_METRICS = {"regret", "normalized_regret"}
-REWARD_METRICS = {"reward_algorithm", "reward_oracle"}
-DISTANCE_METRICS = {"neighbor_disagreement", "consensus_drift"}
-MAX_METRICS = REGRET_METRICS | DISTANCE_METRICS
-PER_NODE_METRICS = (
-    REGRET_METRICS
-    | REWARD_METRICS
-    | DISTANCE_METRICS
-    | {"accuracies", "val_accuracy", "sampler_kl_to_uniform"}
+from banditdl.utils.metrics import (
+    Aggregation,
+    MetricKey,
+    MetricLoader,
+    TimeAverage,
+    Transform,
+    max_,
+    mean,
+    median,
+    min_,
 )
-ALL_PLOT_METRICS = (
-    "val_accuracy",
-    "validation_loss",
-    "train_loss",
-    "neighbor_disagreement",
-    "consensus_drift",
-    "sampler_aggressiveness",
-)
+
+
 NODE_CURVE_COLORS = {
     "average": "tab:blue",
     "max": "red",
@@ -44,196 +29,28 @@ NODE_CURVE_COLORS = {
     "median": "green",
 }
 NODE_LINESTYLE = {"average": "-", "median": "--", "max": "-", "min": "-"}
+NODE_MARKERS = {"average": "o", "median": None, "max": None, "min": None}
+NODE_LINEWIDTH = {"average": 1.7, "median": 1.7, "max": 1.3, "min": 1.3}
 
 
-def _read_eval(path: Path) -> tuple[np.ndarray, np.ndarray]:
-    steps: list[float] = []
-    values: list[float] = []
-    with path.open() as fd:
-        for line in fd:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            step, value, *_ = line.split()
-            steps.append(float(step))
-            values.append(float(value))
-    return np.asarray(steps), np.asarray(values)
+@dataclass(frozen=True)
+class Series:
+    metric: MetricKey | str
+    label: str
+    aggregate: Aggregation | None = None
+    transform: Transform | None = None
+    color: str | None = None
+    linestyle: str = "-"
+    marker: bool = True
+    interpolate_eval: bool = False
 
 
-def _load_raw_array(run_dir: Path, metric: str) -> np.ndarray:
-    metric_aliases = {
-        "val_accuracy": ("validation_accuracies", "accuracies"),
-        "accuracies": ("validation_accuracies", "accuracies"),
-    }
-    if metric == "normalized_regret":
-        regret = _load_raw_array(run_dir, "regret")
-        return _time_normalize(regret)
-    candidate_names = metric_aliases.get(metric, (metric,))
-    path = None
-    for metric_name in candidate_names:
-        candidate = run_dir / f"{metric_name}.npy"
-        if candidate.exists():
-            path = candidate
-            break
-    if path is None:
-        path = run_dir / f"{candidate_names[0]}.npy"
-    if not path.exists():
-        raise FileNotFoundError(path)
-    values_by_worker = np.load(path)
-    if values_by_worker.size == 0:
-        raise ValueError(f"{path} is empty")
-    return values_by_worker
-
-
-def _time_normalize(values: np.ndarray) -> np.ndarray:
-    local_time = np.arange(1, len(values) + 1, dtype=float)[:, None]
-    return np.divide(
-        values,
-        local_time,
-        out=np.full_like(values, np.nan),
-        where=np.isfinite(values),
-    )
-
-
-def _load_full_round_steps(run_dir: Path) -> np.ndarray:
-    for name in (
-        "neighbor_disagreement.npy",
-        "consensus_drift.npy",
-        "reward_algorithm.npy",
-        "regret.npy",
-        "sampler_kl_to_uniform.npy",
-    ):
-        path = run_dir / name
-        if path.exists():
-            return np.arange(np.load(path).shape[0])
-    for name in ("validation", "eval"):
-        path = run_dir / name
-        if path.exists():
-            steps, _ = _read_eval(path)
-            if steps.size:
-                return np.arange(int(np.max(steps)) + 1)
-    raise FileNotFoundError("Could not infer full round axis from run artifacts")
-
-
-def _load_eval_steps(run_dir: Path) -> np.ndarray:
-    for name in ("validation", "eval"):
-        path = run_dir / name
-        if path.exists():
-            steps, _ = _read_eval(path)
-            return steps
-    raise FileNotFoundError(run_dir / "validation")
-
-
-def _interpolate_to_steps(
-    values_by_worker: np.ndarray,
-    source_steps: np.ndarray,
-    target_steps: np.ndarray,
-) -> np.ndarray:
-    if source_steps.shape[0] != values_by_worker.shape[0]:
-        return values_by_worker
-    if source_steps.shape[0] == target_steps.shape[0] and np.allclose(source_steps, target_steps):
-        return values_by_worker
-    if source_steps.shape[0] == 1:
-        return np.repeat(values_by_worker, repeats=target_steps.shape[0], axis=0)
-
-    out = np.zeros((target_steps.shape[0], values_by_worker.shape[1]), dtype=float)
-    for worker_id in range(values_by_worker.shape[1]):
-        out[:, worker_id] = np.interp(
-            target_steps,
-            source_steps,
-            values_by_worker[:, worker_id],
-        )
-    return out
-
-
-def _load_per_node_series(run_dir: Path, metric: str) -> tuple[np.ndarray, np.ndarray]:
-    raw = _load_raw_array(run_dir, metric)
-    steps = np.arange(raw.shape[0])
-    if metric in {"accuracies", "val_accuracy"}:
-        source_steps = _load_eval_steps(run_dir)
-        target_steps = _load_full_round_steps(run_dir)
-        raw = _interpolate_to_steps(raw, source_steps, target_steps)
-        steps = target_steps
-    return steps, raw
-
-
-def _load_series(run_dir: Path, metric: str, stat: str) -> tuple[np.ndarray, np.ndarray]:
-    if metric in ARRAY_METRICS:
-        steps, values_by_worker = _load_per_node_series(run_dir, metric)
-        if stat == "mean":
-            values = values_by_worker.mean(axis=1)
-        elif stat == "worst":
-            reducer = np.max if metric in MAX_METRICS else np.min
-            values = reducer(values_by_worker, axis=1)
-        else:
-            raise ValueError(f"unsupported stat for {metric}: {stat}")
-        return steps, values
-
-    metric_aliases = {
-        "eval": ("validation", "eval"),
-        "eval_worst": ("validation_worst", "eval_worst"),
-        "validation": ("validation", "eval"),
-        "validation_worst": ("validation_worst", "eval_worst"),
-        "loss": ("validation_loss",),
-        "train_loss": ("train_loss",),
-    }
-    candidate_names = metric_aliases.get(metric, (metric,))
-    metric_path = None
-    for metric_name in candidate_names:
-        candidate = run_dir / metric_name
-        if candidate.exists():
-            metric_path = candidate
-            break
-    if metric_path is None:
-        metric_path = run_dir / candidate_names[0]
-    if not metric_path.exists():
-        raise FileNotFoundError(metric_path)
-    steps, values = _read_eval(metric_path)
-    if values.size == 0:
-        raise ValueError(f"{metric_path} is empty")
-    return steps, values
-
-
-def _node_curves(raw: np.ndarray) -> list[tuple[str, np.ndarray]]:
-    return [
-        ("average", raw.mean(axis=1)),
-        ("max", raw.max(axis=1)),
-        ("min", raw.min(axis=1)),
-        ("median", np.median(raw, axis=1)),
-    ]
-
-
-def _ylabel(metric: str) -> str:
-    if metric in {"accuracies", "val_accuracy", "validation", "validation_worst", "test", "eval", "eval_worst"}:
-        return "Accuracy"
-    if metric in {"validation_loss", "loss", "train_loss"}:
-        return "Loss"
-    if metric in REGRET_METRICS:
-        return "Regret"
-    if metric == "neighbor_disagreement":
-        return "Neighbor disagreement"
-    if metric == "consensus_drift":
-        return "Consensus drift"
-    if metric == "sampler_kl_to_uniform":
-        return "KL divergence"
-    return "Reward"
-
-
-def _display_title(metric: str) -> str:
-    titles = {
-        "val_accuracy": "Validation Accuracy",
-        "accuracies": "Validation Accuracy",
-        "validation_loss": "Validation Loss",
-        "train_loss": "Training Loss",
-        "reward_algorithm": "Bandit Reward vs Oracle",
-        "reward_oracle": "Oracle Reward",
-        "regret": "Regret",
-        "normalized_regret": "Normalized Regret",
-        "neighbor_disagreement": "Neighbor Disagreement",
-        "consensus_drift": "Consensus Drift",
-        "sampler_kl_to_uniform": "Sampler KL Divergence to Uniform",
-    }
-    return titles.get(metric, metric.replace("_", " ").title())
+@dataclass(frozen=True)
+class Panel:
+    title: str
+    ylabel: str
+    series: Sequence[Series]
+    ylim: tuple[float, float] | None = None
 
 
 def _extract_run_hparams(label: str) -> str | None:
@@ -248,31 +65,14 @@ def _extract_run_hparams(label: str) -> str | None:
     return rf"$\alpha$={alpha}, n={nodes}, s={sampling}"
 
 
-def _color_for(index: int) -> str:
-    cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-    return cycle[index % len(cycle)]
-
-
-def _plot_curve(ax, steps: np.ndarray, values: np.ndarray, label: str, color: str | None, linestyle: str, marker: bool) -> None:
-    ax.plot(
-        steps,
-        values,
-        marker="o" if marker else None,
-        linewidth=1.7,
-        color=color,
-        linestyle=linestyle,
-        label=label,
-    )
-
-
-def _mark_first_nonfinite(ax, steps: np.ndarray, values: np.ndarray) -> None:
-    finite = np.isfinite(values)
+def _mark_first_nonfinite(ax, x: np.ndarray, y: np.ndarray) -> None:
+    finite = np.isfinite(y)
     if finite.all():
         return
     first_bad = int(np.flatnonzero(~finite)[0])
-    ax.axvline(steps[first_bad], color="black", linestyle=":", linewidth=1)
+    ax.axvline(x[first_bad], color="black", linestyle=":", linewidth=1)
     ax.text(
-        steps[first_bad],
+        x[first_bad],
         0.98,
         "NaN",
         transform=ax.get_xaxis_transform(),
@@ -282,383 +82,256 @@ def _mark_first_nonfinite(ax, steps: np.ndarray, values: np.ndarray) -> None:
     )
 
 
-def _default_label(run_dir: Path, max_length: int) -> str:
-    tokens = run_dir.name.split("-")
-    keep_prefixes = ("sampling_", "degree_", "sampler_", "eps_", "init_", "seed_")
-    label_parts = [token for token in tokens if token.startswith(keep_prefixes) or token in {"cs+", "cs_he", "gts"}]
-    label = ", ".join(label_parts) if label_parts else run_dir.name
-    return shorten(label, width=max_length, placeholder="...")
+class StandardPlotter:
+    def __init__(self, run_dir: Path, run_label: str | None = None):
+        self.run_dir = Path(run_dir)
+        self.run_label = run_label or ""
+        self.loader = MetricLoader(self.run_dir)
+
+    def plot(self, output: Path, panels: Sequence[Panel]) -> Path:
+        if not panels:
+            raise ValueError("At least one panel is required")
+
+        fig, axes = plt.subplots(
+            len(panels),
+            1,
+            figsize=(8, 4.6 if len(panels) == 1 else 3.6 * len(panels)),
+            sharex=len(panels) > 1,
+        )
+        axes = np.atleast_1d(axes)
+
+        for idx, (ax, panel) in enumerate(zip(axes, panels, strict=True)):
+            self._draw_panel(ax, panel)
+            ax.set_title(panel.title, pad=18 if idx == 0 else 8)
+            ax.set_ylabel(panel.ylabel)
+            if panel.ylim is not None:
+                ax.set_ylim(*panel.ylim)
+            if idx == len(panels) - 1:
+                ax.set_xlabel("Round")
+            if idx == 0:
+                caption = _extract_run_hparams(self.run_label)
+                if caption:
+                    ax.text(
+                        0.5,
+                        1.01,
+                        caption,
+                        transform=ax.transAxes,
+                        ha="center",
+                        va="bottom",
+                        fontsize=9,
+                    )
+            ax.grid(True, alpha=0.25)
+            ax.legend(loc="best", ncols=min(4, len(panel.series)), frameon=False, fontsize=8)
+
+        if any(series.aggregate is not None for panel in panels for series in panel.series):
+            fig.text(
+                0.5,
+                0.01,
+                "Node-wise metrics are aggregated each round across nodes.",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+            rect = (0.0, 0.06, 1.0, 0.97)
+        else:
+            rect = (0.0, 0.03, 1.0, 0.97)
+
+        output.parent.mkdir(parents=True, exist_ok=True)
+        fig.tight_layout(rect=rect)
+        fig.savefig(output, dpi=160, bbox_inches="tight")
+        plt.close(fig)
+        return output
+
+    def _draw_panel(self, ax, panel: Panel) -> None:
+        for series in panel.series:
+            data = self.loader.load(series.metric, interpolate_eval=series.interpolate_eval)
+            values = data.values
+            if series.transform is not None:
+                values = series.transform(values)
+            y = self._aggregate(values, series)
+            color = series.color or NODE_CURVE_COLORS.get(series.label)
+            linestyle = NODE_LINESTYLE.get(series.label, series.linestyle)
+            marker = NODE_MARKERS.get(series.label, "o" if series.marker else None)
+            linewidth = NODE_LINEWIDTH.get(series.label, 1.7)
+            ax.plot(
+                data.x,
+                y,
+                marker=marker,
+                linewidth=linewidth,
+                color=color,
+                linestyle=linestyle,
+                label=series.label,
+            )
+            _mark_first_nonfinite(ax, data.x, y)
+
+    @staticmethod
+    def _aggregate(values: np.ndarray, series: Series) -> np.ndarray:
+        if values.ndim == 1:
+            return values
+        if series.aggregate is None:
+            raise ValueError(f"Series '{series.label}' for {series.metric} needs an aggregation")
+        return series.aggregate.fn(values)
 
 
-def _aggregate_series(series: Sequence[tuple[np.ndarray, np.ndarray]]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    if not series:
-        raise ValueError("no series to aggregate")
-    length = min(len(values) for _, values in series)
-    if length == 0:
-        raise ValueError("cannot aggregate empty series")
-    steps = series[0][0][:length]
-    stacked = np.stack([values[:length] for _, values in series])
-    return steps, stacked.mean(axis=0), stacked.std(axis=0)
+def _node_series(metric: MetricKey | str, *, transform: Transform | None = None, interpolate_eval: bool = False) -> list[Series]:
+    return [
+        Series(metric, "average", mean, transform, interpolate_eval=interpolate_eval),
+        Series(metric, "max", max_, transform, interpolate_eval=interpolate_eval),
+        Series(metric, "min", min_, transform, interpolate_eval=interpolate_eval),
+        Series(metric, "median", median, transform, interpolate_eval=interpolate_eval),
+    ]
 
 
-def _add_legend(ax, legend: str) -> None:
-    handles, labels = ax.get_legend_handles_labels()
-    if not handles:
-        return
-    if legend == "outside":
-        # Keep "outside" behavior compatible but place legend inside the axes
-        # to avoid overlap with xlabel/captions in compact figures.
-        ax.legend(handles, labels, loc="upper center", ncols=min(4, len(handles)), frameon=False, fontsize=8)
-        return
-    if legend == "best":
-        ax.legend(handles, labels, loc="best", fontsize=8)
-        return
-    if legend == "none":
-        return
-    raise ValueError(f"Unknown legend placement: {legend}")
+def _sampler_aggressiveness_panels() -> list[Panel]:
+    return [
+        Panel("Sampler Aggressiveness", "KL(bandit || uniform)", _node_series(MetricKey.SAMPLER_KL_TO_UNIFORM)),
+        Panel(
+            "Sampler Probability Range",
+            "Probability",
+            [
+                Series(MetricKey.SAMPLER_MAX_PROBABILITY, "max probability", max_, color="tab:red", marker=False),
+                Series(MetricKey.SAMPLER_MIN_PROBABILITY, "min probability", min_, color="tab:blue", marker=False),
+            ],
+        ),
+    ]
 
 
-def plot_runs(run_dirs: Sequence[Path], output: Path, metric: str, stat: str, title: str | None, labels: Sequence[str] | None, aggregate: bool, legend: str, max_label_length: int) -> None:
+def plot_all(run_dir: Path, plots_dir: Path, run_label: str) -> list[Path]:
+    plotter = StandardPlotter(run_dir, run_label)
+    written: list[Path] = []
+
+    specs = [
+        (
+            "val_accuracy.png",
+            [
+                Panel(
+                    "Validation Accuracy",
+                    "Accuracy",
+                    _node_series(MetricKey.VALIDATION_ACCURACIES, interpolate_eval=True),
+                    ylim=(0, 1),
+                )
+            ],
+        ),
+        (
+            "validation_loss.png",
+            [Panel("Validation Loss", "Loss", [Series(MetricKey.VALIDATION_LOSS, "validation loss")])],
+        ),
+        (
+            "train_loss.png",
+            [Panel("Training Loss", "Loss", [Series(MetricKey.TRAIN_LOSS, "train loss")])],
+        ),
+        (
+            "neighbor_disagreement.png",
+            [Panel("Neighbor Disagreement", "Neighbor disagreement", _node_series(MetricKey.NEIGHBOR_DISAGREEMENT))],
+        ),
+        (
+            "consensus_drift.png",
+            [Panel("Consensus Drift", "Consensus drift", _node_series(MetricKey.CONSENSUS_DRIFT))],
+        ),
+        (
+            "sampler_aggressiveness.png",
+            _sampler_aggressiveness_panels(),
+        ),
+        (
+            "reward.png",
+            [
+                Panel(
+                    "Reward",
+                    "Reward",
+                    _node_series(MetricKey.REWARD_ALGORITHM)
+                    + [Series(MetricKey.REWARD_ORACLE, "oracle average", mean, color="black", linestyle="--", marker=False)],
+                ),
+                Panel(
+                    "Time-normalized reward",
+                    "Reward",
+                    _node_series(MetricKey.REWARD_ALGORITHM, transform=TimeAverage())
+                    + [
+                        Series(
+                            MetricKey.REWARD_ORACLE,
+                            "oracle average",
+                            mean,
+                            TimeAverage(),
+                            color="black",
+                            linestyle="--",
+                            marker=False,
+                        )
+                    ],
+                ),
+            ],
+        ),
+        (
+            "regret.png",
+            [
+                Panel("Regret", "Regret", _node_series(MetricKey.REGRET)),
+                Panel("Normalized regret", "Normalized regret", _node_series(MetricKey.REGRET, transform=TimeAverage())),
+            ],
+        ),
+    ]
+
+    for filename, panels in specs:
+        try:
+            written.append(plotter.plot(plots_dir / filename, panels))
+        except FileNotFoundError:
+            continue
+    return written
+
+
+def plot_runs(
+    run_dirs: Sequence[Path],
+    output: Path,
+    metric: str,
+    stat: str,
+    title: str | None,
+    labels: Sequence[str] | None,
+    aggregate: bool,
+    legend: str,
+    max_label_length: int,
+) -> None:
+    """Small CLI-compatible helper for ad hoc single-metric plots."""
     if metric == "sampler_aggressiveness":
         if len(run_dirs) != 1:
             raise ValueError("sampler_aggressiveness expects exactly one run directory")
-        plot_sampler_aggressiveness(run_dirs[0], output, title)
+        StandardPlotter(run_dirs[0], title).plot(output, _sampler_aggressiveness_panels())
         return
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    xlabel = "Round"
-    is_per_node = metric in PER_NODE_METRICS
+    if labels and len(labels) != len(run_dirs):
+        raise SystemExit("--label must be passed once per run directory")
 
-    if aggregate:
-        if is_per_node:
-            series = [_load_per_node_series(run_dir, metric) for run_dir in run_dirs]
-            length = min(len(raw) for _, raw in series)
-            if length == 0:
-                raise ValueError("cannot aggregate empty per-node series")
-            steps = series[0][0][:length]
-            template = _node_curves(series[0][1][:length])
-            for kind_idx, (kind, _) in enumerate(template):
-                stacked = np.stack(
-                    [_node_curves(raw[:length])[kind_idx][1] for _, raw in series]
-                )
-                mean = stacked.mean(axis=0)
-                _plot_curve(ax, steps, mean, kind, NODE_CURVE_COLORS[kind], NODE_LINESTYLE[kind], kind == "average")
-            if metric == "reward_algorithm":
-                oracle_means = []
-                for run_dir in run_dirs:
-                    try:
-                        oracle_raw = _load_raw_array(run_dir, "reward_oracle")
-                        oracle_means.append(oracle_raw[:length].mean(axis=1))
-                    except FileNotFoundError:
-                        continue
-                if oracle_means:
-                    oracle_mean = np.stack(oracle_means).mean(axis=0)
-                    _plot_curve(ax, steps, oracle_mean, "oracle average", "black", "--", False)
+    series = []
+    for idx, run_dir in enumerate(run_dirs):
+        loader = MetricLoader(run_dir)
+        data = loader.load(metric, interpolate_eval=metric in {"accuracies", "val_accuracy", "validation_accuracies"})
+        values = data.values
+        if values.ndim > 1:
+            reducer = max_ if stat == "worst" else mean
+            y = reducer.fn(values)
         else:
-            series = [_load_series(run_dir, metric, stat) for run_dir in run_dirs]
-            steps, mean, std = _aggregate_series(series)
-            label = labels[0] if labels else f"{metric} {stat}"
-            label = shorten(label, width=max_label_length, placeholder="...")
-            _plot_curve(ax, steps, mean, label, None, "-", True)
-            ax.fill_between(steps, mean - std, mean + std, alpha=0.2)
-    else:
-        if labels and len(labels) != len(run_dirs):
-            raise SystemExit("--label must be passed once per run directory")
-        for index, run_dir in enumerate(run_dirs):
-            base_label = labels[index] if labels else _default_label(run_dir, max_label_length)
-            base_label = shorten(base_label, width=max_label_length, placeholder="...")
+            y = values
+        label = labels[idx] if labels else Path(run_dir).name
+        label = shorten(label, width=max_label_length, placeholder="...")
+        series.append((data.x, y, label))
 
-            if is_per_node:
-                steps, raw = _load_per_node_series(run_dir, metric)
-                for kind, values in _node_curves(raw):
-                    _plot_curve(ax, steps, values, kind, NODE_CURVE_COLORS[kind], NODE_LINESTYLE[kind], kind == "average")
-                if metric == "reward_algorithm":
-                    try:
-                        oracle_raw = _load_raw_array(run_dir, "reward_oracle")
-                    except FileNotFoundError:
-                        oracle_raw = None
-                    if oracle_raw is not None:
-                        oracle_steps = np.arange(len(oracle_raw))
-                        oracle_values = oracle_raw.mean(axis=1)
-                        _plot_curve(
-                            ax,
-                            oracle_steps,
-                            oracle_values,
-                            "oracle average",
-                            "black",
-                            "--",
-                            False,
-                        )
-            else:
-                steps, values = _load_series(run_dir, metric, stat)
-                _plot_curve(ax, steps, values, base_label, None, "-", True)
-
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(_ylabel(metric))
-    if metric in {"accuracies", "val_accuracy", "validation", "validation_worst", "test", "eval", "eval_worst"}:
-        ax.set_ylim(0, 1)
-    for line in list(ax.lines):
-        _mark_first_nonfinite(ax, line.get_xdata(), line.get_ydata())
-    ax.grid(True, alpha=0.25)
-
-    inferred_caption = _extract_run_hparams(title or "")
     if aggregate:
-        plot_title = f"Aggregate {_display_title(metric)}"
+        length = min(len(y) for _, y, _ in series)
+        x = series[0][0][:length]
+        stacked = np.stack([y[:length] for _, y, _ in series])
+        y = np.nanmean(stacked, axis=0)
+        std = np.nanstd(stacked, axis=0)
+        label = labels[0] if labels else f"{metric} {stat}"
+        ax.plot(x, y, marker="o", linewidth=1.7, label=label)
+        ax.fill_between(x, y - std, y + std, alpha=0.2)
     else:
-        plot_title = _display_title(metric)
-    ax.set_title(plot_title, pad=18)
+        for x, y, label in series:
+            ax.plot(x, y, marker="o", linewidth=1.7, label=label)
+            _mark_first_nonfinite(ax, x, y)
 
-    if inferred_caption:
-        ax.text(
-            0.5,
-            1.01,
-            inferred_caption,
-            transform=ax.transAxes,
-            ha="center",
-            va="bottom",
-            fontsize=9,
-        )
-    if is_per_node:
-        fig.text(
-            0.5,
-            0.01,
-            "Node-wise metrics are aggregated each round across nodes: average, median, max, min.",
-            ha="center",
-            va="bottom",
-            fontsize=8,
-        )
-
-    _add_legend(ax, legend)
-    fig.tight_layout(rect=(0.0, 0.07 if is_per_node else 0.03, 1.0, 0.96))
-    output.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output, dpi=160, bbox_inches="tight")
-    plt.close(fig)
-
-
-def plot_sampler_aggressiveness(run_dir: Path, output: Path, title: str | None = None) -> None:
-    kl = _load_raw_array(run_dir, "sampler_kl_to_uniform")
-    min_probability = _load_raw_array(run_dir, "sampler_min_probability")
-    max_probability = _load_raw_array(run_dir, "sampler_max_probability")
-    steps = np.arange(len(kl))
-
-    fig, (ax_kl, ax_prob) = plt.subplots(
-        2,
-        1,
-        figsize=(8, 7),
-        sharex=True,
-        gridspec_kw={"height_ratios": [2, 1]},
-    )
-
-    for kind, values in _node_curves(kl):
-        _plot_curve(
-            ax_kl,
-            steps,
-            values,
-            kind,
-            NODE_CURVE_COLORS[kind],
-            NODE_LINESTYLE[kind],
-            kind == "average",
-        )
-    ax_kl.set_ylabel("KL(bandit || uniform)")
-    ax_kl.set_title("Sampler Aggressiveness", pad=18)
-    caption = _extract_run_hparams(title or "")
-    if caption:
-        ax_kl.text(
-            0.5,
-            1.01,
-            caption,
-            transform=ax_kl.transAxes,
-            ha="center",
-            va="bottom",
-            fontsize=9,
-        )
-    ax_kl.grid(True, alpha=0.25)
-    for line in list(ax_kl.lines):
-        _mark_first_nonfinite(ax_kl, line.get_xdata(), line.get_ydata())
-    ax_kl.legend(ncols=4, frameon=False)
-
-    ax_prob.plot(
-        steps,
-        max_probability.max(axis=1),
-        color="tab:red",
-        linewidth=1.7,
-        label="max probability",
-    )
-    ax_prob.plot(
-        steps,
-        min_probability.min(axis=1),
-        color="tab:blue",
-        linewidth=1.7,
-        label="min probability",
-    )
-    ax_prob.set_xlabel("Round")
-    ax_prob.set_ylabel("Probability")
-    ax_prob.grid(True, alpha=0.25)
-    for line in list(ax_prob.lines):
-        _mark_first_nonfinite(ax_prob, line.get_xdata(), line.get_ydata())
-    ax_prob.legend(ncols=2, frameon=False)
-
+    ax.set_title(title or str(metric).replace("_", " ").title())
+    ax.set_xlabel("Round")
+    ax.grid(True, alpha=0.25)
+    if legend != "none":
+        ax.legend(loc="best" if legend == "best" else "upper center", frameon=False, fontsize=8)
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
     fig.savefig(output, dpi=160, bbox_inches="tight")
     plt.close(fig)
-
-
-def _plot_reward_figure(run_dir: Path, output: Path, title: str) -> None:
-    reward = _load_raw_array(run_dir, "reward_algorithm")
-    oracle = _load_raw_array(run_dir, "reward_oracle")
-    steps = np.arange(len(reward))
-    local_time = np.arange(1, len(reward) + 1, dtype=float)[:, None]
-    normalized_reward = reward / local_time
-    normalized_oracle = oracle / local_time
-
-    fig, (ax_raw, ax_norm) = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
-
-    for kind, values in _node_curves(reward):
-        _plot_curve(ax_raw, steps, values, kind, NODE_CURVE_COLORS[kind], NODE_LINESTYLE[kind], kind == "average")
-    _plot_curve(ax_raw, steps, oracle.mean(axis=1), "oracle average", "black", "--", False)
-    ax_raw.set_title("Bandit Reward vs Oracle", pad=18)
-    caption = _extract_run_hparams(title)
-    if caption:
-        ax_raw.text(0.5, 1.01, caption, transform=ax_raw.transAxes, ha="center", va="bottom", fontsize=9)
-    ax_raw.set_ylabel("Reward")
-    ax_raw.grid(True, alpha=0.25)
-    for line in list(ax_raw.lines):
-        _mark_first_nonfinite(ax_raw, line.get_xdata(), line.get_ydata())
-    ax_raw.legend(loc="best", ncols=3, frameon=False, fontsize=8)
-
-    for kind, values in _node_curves(normalized_reward):
-        _plot_curve(ax_norm, steps, values, kind, NODE_CURVE_COLORS[kind], NODE_LINESTYLE[kind], kind == "average")
-    _plot_curve(
-        ax_norm,
-        steps,
-        normalized_oracle.mean(axis=1),
-        "oracle average",
-        "black",
-        "--",
-        False,
-    )
-    ax_norm.set_xlabel("Round")
-    ax_norm.set_ylabel("Time-normalized reward")
-    ax_norm.grid(True, alpha=0.25)
-    for line in list(ax_norm.lines):
-        _mark_first_nonfinite(ax_norm, line.get_xdata(), line.get_ydata())
-    ax_norm.legend(loc="best", ncols=3, frameon=False, fontsize=8)
-
-    fig.text(
-        0.5,
-        0.01,
-        "Node-wise metrics are aggregated each round across nodes: average, median, max, min.",
-        ha="center",
-        va="bottom",
-        fontsize=8,
-    )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout(rect=(0.0, 0.06, 1.0, 0.97))
-    fig.savefig(output, dpi=160, bbox_inches="tight")
-    plt.close(fig)
-
-
-def _plot_regret_figure(run_dir: Path, output: Path, title: str) -> None:
-    regret = _load_raw_array(run_dir, "regret")
-    normalized_regret = _time_normalize(regret)
-    steps = np.arange(len(regret))
-
-    fig, (ax_regret, ax_normalized) = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
-    ax_regret.set_title("Regret", pad=18)
-    caption = _extract_run_hparams(title)
-    if caption:
-        ax_regret.text(0.5, 1.01, caption, transform=ax_regret.transAxes, ha="center", va="bottom", fontsize=9)
-
-    for kind, values in _node_curves(regret):
-        _plot_curve(
-            ax_regret,
-            steps,
-            values,
-            kind,
-            NODE_CURVE_COLORS[kind],
-            NODE_LINESTYLE[kind],
-            kind == "average",
-        )
-    ax_regret.set_ylabel("Regret")
-    ax_regret.grid(True, alpha=0.25)
-    for line in list(ax_regret.lines):
-        _mark_first_nonfinite(ax_regret, line.get_xdata(), line.get_ydata())
-    ax_regret.legend(loc="best", ncols=4, frameon=False, fontsize=8)
-
-    for kind, values in _node_curves(normalized_regret):
-        _plot_curve(
-            ax_normalized,
-            steps,
-            values,
-            kind,
-            NODE_CURVE_COLORS[kind],
-            NODE_LINESTYLE[kind],
-            kind == "average",
-        )
-    ax_normalized.set_xlabel("Round")
-    ax_normalized.set_ylabel("Normalized regret")
-    ax_normalized.grid(True, alpha=0.25)
-    for line in list(ax_normalized.lines):
-        _mark_first_nonfinite(ax_normalized, line.get_xdata(), line.get_ydata())
-    ax_normalized.legend(loc="best", ncols=4, frameon=False, fontsize=8)
-
-    fig.text(
-        0.5,
-        0.01,
-        "Node-wise metrics are aggregated each round across nodes: average, median, max, min.",
-        ha="center",
-        va="bottom",
-        fontsize=8,
-    )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout(rect=(0.0, 0.06, 1.0, 0.97))
-    fig.savefig(output, dpi=160, bbox_inches="tight")
-    plt.close(fig)
-
-
-def plot_all(run_dir: Path, plots_dir: Path, run_label: str) -> list[Path]:
-    """Generate all supported plots for a single run directory.
-
-    Args:
-        run_dir: Path
-            Directory containing run artifacts (validation/validation_worst and .npy files).
-        plots_dir: Path
-            Output directory for generated plots.
-        run_label: str
-            Label used in plot titles and legends.
-        return: list[Path]
-            Paths of all generated plot files.
-    """
-    written_paths: list[Path] = []
-    plots_dir.mkdir(parents=True, exist_ok=True)
-    for metric in ALL_PLOT_METRICS:
-        filename = "val_accuracy.png" if metric in {"accuracies", "val_accuracy"} else f"{metric}.png"
-        output = plots_dir / filename
-        try:
-            plot_runs(
-                run_dirs=[run_dir],
-                output=output,
-                metric=metric,
-                stat="mean",
-                title=run_label,
-                labels=[run_label],
-                aggregate=False,
-                legend="outside",
-                max_label_length=48,
-            )
-            written_paths.append(output)
-        except FileNotFoundError:
-            continue
-
-    for filename, builder in (
-        ("reward.png", _plot_reward_figure),
-        ("regret.png", _plot_regret_figure),
-    ):
-        output = plots_dir / filename
-        try:
-            builder(run_dir, output, run_label)
-            written_paths.append(output)
-        except FileNotFoundError:
-            continue
-    return written_paths

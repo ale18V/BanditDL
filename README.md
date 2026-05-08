@@ -70,9 +70,9 @@ Behavior:
 - Queues each combo via Optuna `enqueue_trial`, runs one training job per trial.
 - Writes trial artifacts under `<hydra_run>/trials/<param_tokens>/results/` (numpy arrays mirror standard runs).
 - Tracks validation accuracy from `results/validation`, selects the best trial, then re-runs it once with test evaluation under `<hydra_run>/best_trial_test_eval/results`.
-- After all trials finish, renders sweep plots under `<hydra_run>/sweep_artifacts/<plot_mode>/direction=<direction>/` using metrics listed in `plot_metrics`.
+- After all trials finish, renders default sweep plots under `<hydra_run>/sweep_artifacts/`.
 
-Sweep plotting modes (`plot_mode`):
+Sweep plotting is intentionally defined in Python, not YAML. The default sweep plot set lives in `banditdl/utils/plot_sweep_base.py` and currently generates:
 
 | Mode | Meaning |
 | --- | --- |
@@ -80,19 +80,14 @@ Sweep plotting modes (`plot_mode`):
 | `all_together` | WAY 1 style overlays (`banditdl/utils/plot_sweep_alltogether.py`). |
 | `heatmap` | Pairwise heatmaps (`banditdl/utils/plot_sweep_heatmap.py`). |
 
-Both `plot_mode` and `direction` accept either a single value or a list:
+Default sweep reductions over timesteps and nodes:
+- `avg`: arithmetic mean over all timesteps and all nodes.
+- `worse`: worst observed value across timesteps and nodes; uses max for
+  metrics where higher is worse (`regret`, `normalized_regret`,
+  `neighbor_disagreement`, `consensus_drift`, `validation_losses`,
+  `train_losses`) and min otherwise (accuracies, rewards).
 
-```yaml
-plot_mode:
-  - per_parameter
-  - all_together
-  - heatmap
-direction:
-  - avg
-  - worse
-```
-
-When a list is given, plots are written to one separate directory per value:
+Plot outputs are written under:
 
 ```text
 <hydra_run>/sweep_artifacts/
@@ -104,34 +99,19 @@ When a list is given, plots are written to one separate directory per value:
   heatmap/direction=worse/...
 ```
 
-Direction reductions over timesteps and nodes:
-- `avg`: arithmetic mean over all timesteps and all nodes.
-- `worse`: worst observed value across timesteps and nodes; uses max for
-  metrics where higher is worse (`regret`, `normalized_regret`,
-  `neighbor_disagreement`, `consensus_drift`, `validation_losses`,
-  `train_losses`) and min otherwise (accuracies, rewards).
-
-Aliases accepted: `mean`/`average` for `avg`, `worst` for `worse`.
-
 If a particular `(metric, mode, direction, fixed-axes)` combination has no
 plottable points (missing arrays or no matching trials), the plot is **skipped
 with a warning** instead of writing a blank PNG.
 
-Override sweep settings from the CLI:
+To change sweep plots, edit the Python defaults or run a separate plotting script after the sweep. Experiment parameters and Optuna search spaces remain Hydra-controlled.
 
 ```bash
-uv run python -m banditdl.experiments.sweep optuna=sweep \
-  'plot_mode=[per_parameter,heatmap]' 'direction=[avg,worse]'
+uv run python -m banditdl.experiments.sweep optuna=sweep
 ```
 
 Note on Hydra composition: `conf/override.yaml` is loaded as the last entry of
 `conf/config.yaml`'s defaults list. `conf/sweep.yaml` then composes `config`
-first and merges its own keys (including `plot_mode`, `direction`,
-`plot_metrics`, and the bundled `optuna` group) afterwards. This means
-`override.yaml` can override fields owned by `config.yaml` and its sub-groups,
-but **cannot** override sweep-only fields such as `plot_mode`, `direction`,
-`plot_metrics`, or `optuna.*` (those are merged later by `sweep.yaml`). Use CLI
-overrides or edit `sweep.yaml` for those.
+first and selects the bundled `optuna` group afterwards. `override.yaml` can override fields owned by `config.yaml` and its sub-groups, while `optuna.*` is controlled by the selected Optuna config or CLI overrides.
 
 ### Ad-hoc Sweep From CLI
 
@@ -316,7 +296,7 @@ Example run folder:
   plots/
 ```
 
-Plotting logic now lives in `banditdl/utils/plotting.py`. The script `scripts/plot_results.py` remains as a thin offline CLI wrapper around that helper.
+Plotting logic is code-driven. Metric loading, transforms, and aggregations live in `banditdl/utils/metrics.py`; runtime figures are defined imperatively in `banditdl/utils/plotting.py`. The script `scripts/plot_results.py` remains as a thin offline CLI wrapper around those helpers.
 
 Plot one run:
 
@@ -354,7 +334,7 @@ Useful options:
 - `--metric test`: plot held-out test accuracy from `test` (single final point when available).
 - `--metric eval|eval_worst`: legacy aliases for older run folders.
 - `--metric regret`: plot regret against the best fixed neighbor subset in hindsight.
-- `--metric normalized_regret`: plot regret divided by oracle reward.
+- `--metric normalized_regret`: plot time-averaged regret, derived from `regret.npy`.
 - `--metric reward_algorithm|reward_oracle`: plot cumulative reward curves.
 - `--metric neighbor_disagreement`: plot mean/median/max neighbor disagreement over rounds.
 - `--metric consensus_drift`: plot mean/median/max drift from the global average model.
@@ -531,7 +511,7 @@ Dynamic runs also save hindsight diagnostics for every sampler, including unifor
 - `reward_algorithm.npy`: cumulative reward achieved by sampled neighbors.
 - `reward_oracle.npy`: cumulative reward of the best fixed neighbor subset in hindsight.
 - `regret.npy`: `reward_oracle - reward_algorithm`.
-- `normalized_regret.npy`: regret divided by oracle reward.
+- time-averaged regret is derived from `regret.npy` when plotting.
 - `selected_neighbors.npy`: sampled neighbors per round and worker.
 - `oracle_neighbors.npy`: best fixed hindsight neighbors per round and worker.
 - `sampler_kl_to_uniform.npy`: per-round, per-node KL divergence from the sampler distribution to uniform.

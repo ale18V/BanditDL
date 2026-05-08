@@ -12,8 +12,6 @@ from banditdl.experiments.engine import run_dynamic, run_fixed
 from banditdl.utils.plot_sweep_base import (
     build_axis_metadata,
     enumerate_valid_param_dicts,
-    normalize_directions,
-    normalize_plot_modes,
     plot_sweep,
     trial_folder_name,
 )
@@ -98,13 +96,6 @@ def _run_best_trial_test_evaluation(best_trial, base_cfg, output_root: Path) -> 
     return _read_metric_file_max(best_result_dir / "test")
 
 
-def _metrics_list_from_cfg(cfg) -> list:
-    raw = cfg.get("plot_metrics")
-    if raw is None:
-        return []
-    return list(OmegaConf.to_container(raw, resolve=True))
-
-
 @hydra.main(version_base=None, config_path="../../conf", config_name="sweep")
 def main(cfg) -> None:
     output_root = Path(HydraConfig.get().runtime.output_dir)
@@ -150,22 +141,14 @@ def main(cfg) -> None:
     print(f"[optuna] best trial final test directory: {output_root / 'best_trial_test_eval' / 'results'}")
     print(f"[optuna] best trial final test_accuracy: {final_test_accuracy:.6f}")
 
-    metrics_list = _metrics_list_from_cfg(cfg)
-    plot_modes = normalize_plot_modes(cfg.plot_mode)
-    plot_directions = normalize_directions(cfg.get("direction"))
     sweep_plot_root = output_root / "sweep_artifacts"
     plot_sweep(
-        plot_modes,
-        plot_directions,
         trials_root,
         study,
         search_space,
-        metrics_list,
         sweep_plot_root,
     )
-    print(
-        f"[optuna] sweep plots written to: {sweep_plot_root} | modes={plot_modes} directions={plot_directions}"
-    )
+    print(f"[optuna] sweep plots written to: {sweep_plot_root}")
 
 
 if __name__ == "__main__":

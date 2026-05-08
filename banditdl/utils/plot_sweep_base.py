@@ -6,11 +6,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
-import numpy as np
 import optuna
 from omegaconf import OmegaConf
 
-from banditdl.utils.plotting import MAX_METRICS, _load_raw_array
+from banditdl.utils.metrics import MetricLoader, scalar_reduce
 
 
 DEFAULT_PLOT_METRICS: tuple[str, ...] = (
@@ -25,71 +24,8 @@ DEFAULT_PLOT_METRICS: tuple[str, ...] = (
     "consensus_drift",
 )
 
-# Metrics where higher numeric value corresponds to the worse situation.
-# MAX_METRICS already covers regret/distance metrics; losses are added because
-# higher loss is also worse for the model.
-_LOSS_METRICS: tuple[str, ...] = (
-    "validation_losses",
-    "train_losses",
-    "validation_loss",
-    "train_loss",
-)
-HIGHER_IS_WORSE = set(MAX_METRICS) | set(_LOSS_METRICS)
-
 DEFAULT_DIRECTIONS: tuple[str, ...] = ("avg", "worse")
-
-_DIRECTION_ALIASES = {
-    "avg": "avg",
-    "mean": "avg",
-    "average": "avg",
-    "worse": "worse",
-    "worst": "worse",
-}
-
-
-def normalize_direction(value):
-    """
-    Normalize a plot direction token to canonical avg/worse.
-
-    Args:
-      value: Any
-        Raw direction token from config.
-
-    return: str
-      Canonical direction name (avg or worse).
-    """
-    token = str(value).lower().strip()
-    if token not in _DIRECTION_ALIASES:
-        raise ValueError(
-            f"Unsupported direction '{value}'. Allowed: avg, mean, average, worse, worst."
-        )
-    return _DIRECTION_ALIASES[token]
-
-
-def normalize_directions(value):
-    """
-    Coerce a scalar or list direction config into a normalized list.
-
-    Args:
-      value: Any
-        DictConfig list, plain list, scalar string, or None.
-
-    return: list
-      Ordered list of canonical direction names (deduplicated).
-    """
-    if value is None:
-        return list(DEFAULT_DIRECTIONS)
-    raw = OmegaConf.to_container(value, resolve=True) if OmegaConf.is_config(value) else value
-    if isinstance(raw, str) or not isinstance(raw, (list, tuple)):
-        raw = [raw]
-    seen = []
-    for item in raw:
-        canonical = normalize_direction(item)
-        if canonical not in seen:
-            seen.append(canonical)
-    if not seen:
-        return list(DEFAULT_DIRECTIONS)
-    return seen
+DEFAULT_PLOT_MODES: tuple[str, ...] = ("per_parameter", "all_together", "heatmap")
 
 
 def _strip_meta(spec):
@@ -330,13 +266,7 @@ def scalar_for_direction(metric_name, array_values, direction):
     return: float
       Reduced scalar value.
     """
-    if direction == "avg":
-        return float(np.mean(array_values))
-    if direction == "worse":
-        if metric_name in HIGHER_IS_WORSE:
-            return float(np.max(array_values))
-        return float(np.min(array_values))
-    raise ValueError(f"Unsupported direction: {direction}")
+    return scalar_reduce(metric_name, array_values, direction)
 
 
 def column_key_for(metric_name, direction):
@@ -511,7 +441,7 @@ def sweep_table_from_study(trials_root, study, search_space, metric_names, direc
         metrics_flat = {}
         for metric in metric_names:
             try:
-                raw = _load_raw_array(result_dir, metric)
+                raw = MetricLoader(result_dir).load_values(metric)
             except (FileNotFoundError, ValueError, OSError) as exc:
                 print(f"[plot_sweep] WARNING: skip metric '{metric}' for trial {result_dir}: {exc}")
                 continue
@@ -603,75 +533,32 @@ class BaseSweepPlotter(ABC):
         return "__".join(segments)
 
 
-_VALID_PLOT_MODES = ("per_parameter", "all_together", "heatmap")
-
-
-def normalize_plot_modes(value):
+def plot_sweep(trials_root, study, search_space, output_dir):
     """
-    Coerce a scalar or list plot_mode config into a canonical mode list.
+    Dispatch the code-defined default sweep plots.
 
-    Args:
-      value: Any
-        DictConfig list, plain list, or scalar string.
-
-    return: list
-      Ordered list of valid plot mode names (deduplicated).
-    """
-    if value is None:
-        raise ValueError("plot_mode must be set (string or list).")
-    raw = OmegaConf.to_container(value, resolve=True) if OmegaConf.is_config(value) else value
-    if isinstance(raw, str) or not isinstance(raw, (list, tuple)):
-        raw = [raw]
-    seen = []
-    for item in raw:
-        token = str(item).lower().strip()
-        if token not in _VALID_PLOT_MODES:
-            raise ValueError(
-                f"Unsupported plot_mode '{item}'. Allowed: {', '.join(_VALID_PLOT_MODES)}."
-            )
-        if token not in seen:
-            seen.append(token)
-    if not seen:
-        raise ValueError("plot_mode resolves to empty list.")
-    return seen
-
-
-def plot_sweep(modes, directions, trials_root, study, search_space, metric_names, output_dir):
-    """
-    Dispatch sweep plotting across every (mode, direction) combination.
-
-    For each requested plot mode and each requested direction the plots are
+    For each default plot mode and each default direction the plots are
     written under output_dir/<mode>/direction=<direction>/...
 
     Args:
-      modes: list | str
-        One or many plot modes (per_parameter, all_together, heatmap).
-      directions: list | str
-        One or many direction tokens (avg, worse).
       trials_root: Path
         Trial artifact root (contains per-trial folders).
       study: optuna.study.Study
         Completed study with trials.
       search_space: dict
         Original sweep mapping from YAML.
-      metric_names: list
-        Metrics to plot (stems).
       output_dir: Path
         Destination root folder for PNG outputs.
     """
-    resolved_metrics = list(metric_names)
-    if not resolved_metrics:
-        resolved_metrics = list(DEFAULT_PLOT_METRICS)
-    canonical_modes = normalize_plot_modes(modes)
-    canonical_directions = normalize_directions(directions)
+    resolved_metrics = list(DEFAULT_PLOT_METRICS)
 
     table = sweep_table_from_study(
-        trials_root, study, search_space, resolved_metrics, canonical_directions
+        trials_root, study, search_space, resolved_metrics, list(DEFAULT_DIRECTIONS)
     )
     axes, _ = build_axis_metadata(search_space)
 
-    for mode in canonical_modes:
-        for direction in canonical_directions:
+    for mode in DEFAULT_PLOT_MODES:
+        for direction in DEFAULT_DIRECTIONS:
             mode_dir = output_dir / mode / f"direction={direction}"
             plotter = make_sweep_plotter(mode, table, axes, mode_dir)
             plotter.plot(resolved_metrics, direction)
