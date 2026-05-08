@@ -196,84 +196,94 @@ def _sampler_aggressiveness_panels() -> list[Panel]:
     ]
 
 
-def plot_all(run_dir: Path, plots_dir: Path, run_label: str) -> list[Path]:
+def plot_all(run_dir: Path, plots_dir: Path, run_label: str) -> None:
     plotter = StandardPlotter(run_dir, run_label)
-    written: list[Path] = []
 
-    specs = [
-        (
-            "val_accuracy.png",
-            [
-                Panel(
-                    "Validation Accuracy",
-                    "Accuracy",
-                    _node_series(MetricKey.VALIDATION_ACCURACIES, interpolate_eval=True),
-                    ylim=(0, 1),
-                )
-            ],
-        ),
-        (
-            "validation_loss.png",
-            [Panel("Validation Loss", "Loss", [Series(MetricKey.VALIDATION_LOSS, "validation loss")])],
-        ),
-        (
-            "train_loss.png",
-            [Panel("Training Loss", "Loss", [Series(MetricKey.TRAIN_LOSS, "train loss")])],
-        ),
-        (
-            "neighbor_disagreement.png",
-            [Panel("Neighbor Disagreement", "Neighbor disagreement", _node_series(MetricKey.NEIGHBOR_DISAGREEMENT))],
-        ),
-        (
-            "consensus_drift.png",
-            [Panel("Consensus Drift", "Consensus drift", _node_series(MetricKey.CONSENSUS_DRIFT))],
-        ),
-        (
-            "sampler_aggressiveness.png",
-            _sampler_aggressiveness_panels(),
-        ),
-        (
-            "reward.png",
-            [
-                Panel(
-                    "Reward",
-                    "Reward",
-                    _node_series(MetricKey.REWARD_ALGORITHM)
-                    + [Series(MetricKey.REWARD_ORACLE, "oracle average", mean, color="black", linestyle="--", marker=False)],
-                ),
-                Panel(
-                    "Time-normalized reward",
-                    "Reward",
-                    _node_series(MetricKey.REWARD_ALGORITHM, transform=TimeAverage())
-                    + [
-                        Series(
-                            MetricKey.REWARD_ORACLE,
-                            "oracle average",
-                            mean,
-                            TimeAverage(),
-                            color="black",
-                            linestyle="--",
-                            marker=False,
-                        )
-                    ],
-                ),
-            ],
-        ),
-        (
-            "regret.png",
-            [
-                Panel("Regret", "Regret", _node_series(MetricKey.REGRET)),
-                Panel("Normalized regret", "Normalized regret", _node_series(MetricKey.REGRET, transform=TimeAverage())),
-            ],
-        ),
-    ]
+    plotter.plot(
+        plots_dir / "val_accuracy.png",
+        [
+            Panel(
+                "Validation Accuracy",
+                "Accuracy",
+                _node_series(MetricKey.VALIDATION_ACCURACIES, interpolate_eval=True),
+                ylim=(0, 1),
+            )
+        ],
+    )
 
-    for filename, panels in specs:
-        try:
-            written.append(plotter.plot(plots_dir / filename, panels))
-        except FileNotFoundError:
-            continue
-    return written
+    plotter.plot(
+        plots_dir / "validation_loss.png",
+        [Panel("Validation Loss", "Loss", [Series(MetricKey.VALIDATION_LOSS, "validation loss")])],
+    )
+
+    plotter.plot(
+        plots_dir / "train_loss.png",
+        [Panel("Training Loss", "Loss", [Series(MetricKey.TRAIN_LOSS, "train loss")])],
+    )
+
+    plotter.plot(
+        plots_dir / "neighbor_disagreement.png",
+        [Panel("Neighbor Disagreement", "Neighbor disagreement", _node_series(MetricKey.NEIGHBOR_DISAGREEMENT))],
+    )
+
+    plotter.plot(
+        plots_dir / "consensus_drift.png",
+        [Panel("Consensus Drift", "Consensus drift", _node_series(MetricKey.CONSENSUS_DRIFT))],
+    )
+
+    plotter.plot(
+        plots_dir / "sampler_aggressiveness.png",
+        _sampler_aggressiveness_panels(),
+    )
+
+    plotter.plot(
+        plots_dir / "reward.png",
+        [
+            Panel(
+                "Reward",
+                "Reward",
+                _node_series(MetricKey.REWARD_ALGORITHM)
+                + [
+                    Series(
+                        MetricKey.REWARD_ORACLE,
+                        "oracle average",
+                        mean,
+                        color="black",
+                        linestyle="--",
+                        marker=False,
+                    )
+                ],
+            ),
+            Panel(
+                "Time-normalized reward",
+                "Reward",
+                _node_series(MetricKey.REWARD_ALGORITHM, transform=TimeAverage())
+                + [
+                    Series(
+                        MetricKey.REWARD_ORACLE,
+                        "oracle average",
+                        mean,
+                        TimeAverage(),
+                        color="black",
+                        linestyle="--",
+                        marker=False,
+                    )
+                ],
+            ),
+        ],
+    )
+
+    plotter.plot(
+        plots_dir / "regret.png",
+        [
+            Panel("Regret", "Regret", _node_series(MetricKey.REGRET)),
+            Panel(
+                "Normalized regret",
+                "Normalized regret",
+                _node_series(MetricKey.REGRET, transform=TimeAverage()),
+            ),
+        ],
+    )
 
 
 def plot_runs(
