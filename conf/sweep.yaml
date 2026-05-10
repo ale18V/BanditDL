@@ -3,27 +3,23 @@ defaults:
   - optuna: sanitysweep
   - _self_
 
-# Sweep plotting controls. Keep this explicit so large sweeps do not
-# accidentally generate every supported visualization.
-plot_mode:
-  - per_parameter
-  - all_together
-  - heatmap
+plot:
+  enabled: true
+  directions:
+    - avg
+    - worse
 
-# avg = mean over all saved timesteps/nodes.
-# worse = worst scalar for the metric, using max for losses/regret/drift and
-# min for accuracy-like metrics.
-direction:
-  - avg
-  - worse
+  # By default, sweep plots try every known scalar metric saved by the runs.
+  # Individual plot specs can remove metrics with exclude_metrics.
+  heatmaps:
+    - x: heterogeneity.alpha
+      y: topology.sampling
+      group_by:
+        - sampler.name
+        - [sampler.name, sampler.params.epsilon]
+      aggregate_by: avg
+      exclude_metrics: []
 
-plot_metrics:
-  - validation_accuracies
-  - validation_losses
-  - train_losses
-  - reward_algorithm
-  - reward_oracle
-  - regret
-  - normalized_regret
-  - neighbor_disagreement
-  - consensus_drift
+  per_parameter:
+    enabled: false
+    exclude_metrics: []

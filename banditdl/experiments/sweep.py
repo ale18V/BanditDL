@@ -10,11 +10,11 @@ from omegaconf import OmegaConf
 from banditdl.experiments.config_adapter import build_engine_config, resolve_device
 from banditdl.experiments.engine import run_dynamic, run_fixed
 from banditdl.utils.plot_sweep_base import (
+    STUDY_NAME,
     build_axis_metadata,
     enumerate_valid_param_dicts,
-    normalize_directions,
-    normalize_plot_modes,
-    plot_sweep,
+    optuna_storage_url,
+    plot_sweep_from_cfg,
     trial_folder_name,
 )
 
@@ -45,7 +45,7 @@ def _resolved_trial_params(trial) -> dict:
     return {}
 
 
-def _objective(trial, base_cfg, trials_root: Path, axis_lookup: dict, combos: list) -> float:
+def _objective(trial, base_cfg, output_root: Path, axis_lookup: dict, combos: list) -> float:
     trial_index = int(trial.number)
     if trial_index >= len(combos):
         raise IndexError(
@@ -58,6 +58,7 @@ def _objective(trial, base_cfg, trials_root: Path, axis_lookup: dict, combos: li
         OmegaConf.update(trial_cfg, path, value, merge=False)
 
     folder_name = trial_folder_name(trial_params, axis_lookup)
+    trials_root = output_root / "trials"
     trial_result_dir = trials_root / folder_name / "results"
     trial_result_dir.mkdir(parents=True, exist_ok=True)
     run_cfg = build_engine_config(trial_cfg)
@@ -72,6 +73,7 @@ def _objective(trial, base_cfg, trials_root: Path, axis_lookup: dict, combos: li
     validation_metric = _read_metric_file_max(trial_result_dir / "validation")
     trial.set_user_attr("validation_accuracy", validation_metric)
     trial.set_user_attr("result_dir", str(trial_result_dir))
+    trial.set_user_attr("result_path", str(trial_result_dir.relative_to(output_root)))
     trial.set_user_attr("seed", seed_value)
     trial.set_user_attr("resolved_params", trial_params)
     return validation_metric
@@ -96,13 +98,6 @@ def _run_best_trial_test_evaluation(best_trial, base_cfg, output_root: Path) -> 
         run_fixed(params=run_cfg.params, result_dir=best_result_dir, seed=seed_value, device=device)
 
     return _read_metric_file_max(best_result_dir / "test")
-
-
-def _metrics_list_from_cfg(cfg) -> list[str]:
-    raw = cfg.get("plot_metrics")
-    if raw is None:
-        return []
-    return list(OmegaConf.to_container(raw, resolve=True))
 
 
 @hydra.main(version_base=None, config_path="../../conf", config_name="sweep")
@@ -131,10 +126,15 @@ def main(cfg) -> None:
     axis_lookup = {path: axis_meta.get(path, {}) for path in search_space.keys()}
 
     direction = str(optuna_cfg.direction)
-    study = optuna.create_study(direction=direction)
+    study = optuna.create_study(
+        direction=direction,
+        storage=optuna_storage_url(output_root),
+        study_name=STUDY_NAME,
+        load_if_exists=True,
+    )
     total_trials = len(combos)
     print(f"[optuna] grid trials={total_trials} | metric=validation_accuracy | trials_dir={trials_root}")
-    study.optimize(lambda trial: _objective(trial, cfg, trials_root, axis_lookup, combos), n_trials=total_trials)
+    study.optimize(lambda trial: _objective(trial, cfg, output_root, axis_lookup, combos), n_trials=total_trials)
 
     best = study.best_trial
     best_dir = best.user_attrs.get("result_dir")
@@ -150,23 +150,8 @@ def main(cfg) -> None:
     print(f"[optuna] best trial final test directory: {output_root / 'best_trial_test_eval' / 'results'}")
     print(f"[optuna] best trial final test_accuracy: {final_test_accuracy:.6f}")
 
-    metrics_list = _metrics_list_from_cfg(cfg)
-    plot_modes = normalize_plot_modes(cfg.get("plot_mode"))
-    plot_directions = normalize_directions(cfg.get("direction"))
-    sweep_plot_root = output_root / "sweep_artifacts"
-    plot_sweep(
-        plot_modes,
-        plot_directions,
-        trials_root,
-        study,
-        search_space,
-        metrics_list,
-        sweep_plot_root,
-    )
-    print(
-        f"[optuna] sweep plots written to: {sweep_plot_root} | "
-        f"modes={plot_modes} directions={plot_directions}"
-    )
+    plot_sweep_from_cfg(output_root, cfg, study=study)
+    print(f"[optuna] sweep plots written to: {output_root / 'sweep_artifacts'}")
 
 
 if __name__ == "__main__":

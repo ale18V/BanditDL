@@ -4,6 +4,7 @@ import re
 import string
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import optuna
@@ -22,10 +23,15 @@ DEFAULT_PLOT_METRICS: tuple[str, ...] = (
     "normalized_regret",
     "neighbor_disagreement",
     "consensus_drift",
+    "sampler_kl_to_uniform",
+    "sampler_min_probability",
+    "sampler_max_probability",
 )
 
 DEFAULT_DIRECTIONS: tuple[str, ...] = ("avg", "worse")
-DEFAULT_PLOT_MODES: tuple[str, ...] = ("per_parameter", "all_together", "heatmap")
+DEFAULT_PLOT_MODES: tuple[str, ...] = ("per_parameter", "heatmap")
+STUDY_NAME = "sweep"
+OPTUNA_DB_NAME = "optuna.db"
 
 _DIRECTION_ALIASES = {
     "avg": "avg",
@@ -65,92 +71,43 @@ def normalize_plot_modes(value):
     raw = OmegaConf.to_container(value, resolve=True) if OmegaConf.is_config(value) else value
     if isinstance(raw, str) or not isinstance(raw, (list, tuple)):
         raw = [raw]
+    valid = set(DEFAULT_PLOT_MODES) | {"all_together"}
     modes = []
     for item in raw:
         mode = str(item).lower().strip()
-        if mode not in DEFAULT_PLOT_MODES:
-            raise ValueError(
-                f"Unsupported plot_mode '{item}'. Allowed: {', '.join(DEFAULT_PLOT_MODES)}."
-            )
+        if mode not in valid:
+            raise ValueError(f"Unsupported plot_mode '{item}'. Allowed: {', '.join(sorted(valid))}.")
         if mode not in modes:
             modes.append(mode)
     return modes or list(DEFAULT_PLOT_MODES)
 
 
 def _strip_meta(spec):
-    """
-    Remove Optuna metadata keys from a search-space entry.
-
-    Args:
-      spec: Any
-        Raw YAML entry or dict.
-
-    return: tuple
-      (inner_spec, display_name_or_none)
-    """
     if not isinstance(spec, dict):
         return spec, None
     inner = {k: v for k, v in spec.items() if k not in ("when", "name")}
     display_name = spec.get("name")
-    if display_name is not None:
-        display_name = str(display_name)
-    return inner, display_name
+    return inner, str(display_name) if display_name is not None else None
 
 
 def _choices_from_spec(inner_spec):
-    """
-    Build the ordered choice list for a categorical sweep axis.
-
-    Args:
-      inner_spec: Any
-        Search-space entry without metadata.
-
-    return: list
-      Choice values (may be empty if not categorical).
-    """
     if isinstance(inner_spec, list):
         return list(inner_spec)
     if not isinstance(inner_spec, dict):
         return []
-    param_type = str(inner_spec.get("type", "")).lower()
-    if param_type == "categorical":
-        choices = inner_spec.get("choices")
-        if isinstance(choices, list):
-            return list(choices)
-    return []
+    if str(inner_spec.get("type", "")).lower() != "categorical":
+        return []
+    choices = inner_spec.get("choices")
+    return list(choices) if isinstance(choices, list) else []
 
 
 def _when_clause(spec):
-    """
-    Extract optional conditional clause from a search-space entry.
-
-    Args:
-      spec: Any
-        Raw YAML entry.
-
-    return: dict | None
-      When-clause mapping or None.
-    """
-    if isinstance(spec, dict) and "when" in spec:
-        when_val = spec.get("when")
-        if isinstance(when_val, dict):
-            return when_val
+    if isinstance(spec, dict) and isinstance(spec.get("when"), dict):
+        return spec["when"]
     return None
 
 
 def _conditions_met(cfg, conditions):
-    """
-    Check whether composed config satisfies all expected values.
-
-    Args:
-      cfg: Any
-        OmegaConf-compatible config object.
-      conditions: dict
-        Path -> expected scalar or list of allowed values.
-
-    return: bool
-      True when every condition holds.
-    """
     if conditions is None:
         return True
     if not isinstance(conditions, dict) or not conditions:
@@ -160,23 +117,12 @@ def _conditions_met(cfg, conditions):
         if isinstance(expected, list):
             if actual not in expected:
                 return False
-        else:
-            if actual != expected:
-                return False
+        elif actual != expected:
+            return False
     return True
 
 
 def _normalize_search_space(search_space):
-    """
-    Convert sweep YAML mapping into ordered path keys with cleaned specs.
-
-    Args:
-      search_space: dict
-        Mapping path -> spec.
-
-    return: tuple
-      (ordered_paths, normalized_specs, display_names)
-    """
     paths = sorted(search_space.keys())
     normalized = {}
     display_names = {}
@@ -190,19 +136,7 @@ def _normalize_search_space(search_space):
 
 
 def enumerate_valid_param_dicts(base_cfg, search_space):
-    """
-    Enumerate every valid Optuna param dict for a categorical sweep with optional when clauses.
-
-    Args:
-      base_cfg: Any
-        OmegaConf base configuration used to evaluate when clauses.
-      search_space: dict
-        Full optuna.search_space mapping.
-
-    return: list
-      List of dict path -> sampled value (only active params included).
-    """
-    ordered_paths, normalized_specs, _ = _normalize_search_space(search_space)
+    ordered_paths, _, _ = _normalize_search_space(search_space)
     outcomes = []
 
     def walk(acc_params, idx):
@@ -233,21 +167,10 @@ def enumerate_valid_param_dicts(base_cfg, search_space):
 
 
 def build_grid_search_space(search_space):
-    """
-    Build Optuna GridSampler search_space mapping from categorical YAML entries.
-
-    Args:
-      search_space: dict
-        Full optuna.search_space mapping.
-
-    return: dict
-      Optuna GridSampler-compatible mapping path -> list of values.
-    """
-    ordered_paths, normalized_specs, _ = _normalize_search_space(search_space)
+    ordered_paths, _, _ = _normalize_search_space(search_space)
     grid = {}
     for path in ordered_paths:
-        raw_spec = search_space[path]
-        inner_spec, _ = _strip_meta(raw_spec)
+        inner_spec, _ = _strip_meta(search_space[path])
         choices = _choices_from_spec(inner_spec)
         if choices:
             grid[path] = choices
@@ -255,96 +178,30 @@ def build_grid_search_space(search_space):
 
 
 def trial_folder_name(params, axis_meta):
-    """
-    Build a filesystem-safe folder label from trial params.
-
-    Args:
-      params: dict
-        Flat Optuna param mapping path -> value.
-      axis_meta: dict
-        Mapping path -> dict with key display_name.
-
-    return: str
-      Folder name segments joined by underscores.
-    """
     parts = []
     for path in sorted(params.keys()):
         label = axis_meta.get(path, {}).get("display_name", path.split(".")[-1])
-        val = params[path]
-        token = _sanitize_token(val)
-        parts.append(f"{label}={token}")
+        parts.append(f"{label}={_sanitize_token(params[path])}")
     return "_".join(parts)
 
 
 def _sanitize_token(value):
-    """
-    Convert a sweep value into a short filesystem-safe token.
-
-    Args:
-      value: Any
-        Parameter value.
-
-    return: str
-      Safe token string.
-    """
     text = str(value)
     allowed = string.ascii_letters + string.digits + ".-+"
     cleaned = "".join(ch if ch in allowed else "_" for ch in text)
     cleaned = re.sub(r"_+", "_", cleaned).strip("_")
-    if not cleaned:
-        cleaned = "value"
-    return cleaned
+    return cleaned or "value"
 
 
 def scalar_for_direction(metric_name, array_values, direction):
-    """
-    Reduce a metric array to a single scalar according to a direction.
-
-    avg averages over all timesteps and nodes. worse takes the worst value
-    over timesteps and nodes, where worst means max for metrics in
-    HIGHER_IS_WORSE and min otherwise.
-
-    Args:
-      metric_name: str
-        Metric stem matching plotting conventions.
-      array_values: ndarray
-        Loaded numpy array (any shape).
-      direction: str
-        Canonical direction name (avg or worse).
-
-    return: float
-      Reduced scalar value.
-    """
     return scalar_reduce(metric_name, array_values, direction)
 
 
 def column_key_for(metric_name, direction):
-    """
-    Build the SweepRow.metrics column key for a metric/direction pair.
-
-    Args:
-      metric_name: str
-        Metric stem.
-      direction: str
-        Canonical direction name.
-
-    return: str
-      Column key string.
-    """
     return f"{metric_name}__{direction}"
 
 
 def build_axis_metadata(search_space):
-    """
-    Collect sweep-axis metadata for plotting labels and ordering.
-
-    Args:
-      search_space: dict
-        Full optuna.search_space mapping.
-
-    return: tuple
-      (axes_list, axis_meta_lookup)
-    """
     ordered_paths, _, display_names = _normalize_search_space(search_space)
     axes = []
     meta = {}
@@ -355,24 +212,21 @@ def build_axis_metadata(search_space):
         if not choices:
             continue
         display = alias if alias else path.split(".")[-1]
-        when_clause = _when_clause(raw_spec)
         axes.append(
             SweepAxis(
                 path=path,
                 display_name=display,
                 values=list(choices),
-                when=when_clause,
-                is_conditional=when_clause is not None,
+                when=_when_clause(raw_spec),
+                is_conditional=_when_clause(raw_spec) is not None,
             )
         )
         meta[path] = {"display_name": display}
     return axes, meta
 
 
-@dataclass
+@dataclass(frozen=True)
 class SweepAxis:
-    """One categorical sweep dimension."""
-
     path: str
     display_name: str
     values: list[Any]
@@ -382,36 +236,15 @@ class SweepAxis:
 
 @dataclass
 class SweepRow:
-    """Scalar metrics for one trial."""
-
     params: dict[str, Any]
     metrics: dict[str, float] = field(default_factory=dict)
 
 
 class SweepTable:
-    """Tabular collection of metric scalars keyed by trial params."""
-
     def __init__(self, rows):
-        """
-        Initialize sweep table.
-
-        Args:
-          rows: list
-            Sequence of SweepRow instances.
-        """
         self.rows = rows
 
     def filtered_rows(self, axis_paths):
-        """
-        Restrict rows to axes whose when clauses are satisfied jointly.
-
-        Args:
-          axis_paths: list
-            Paths participating in the current plot.
-
-        return: list
-          Filtered SweepRow objects.
-        """
         paths_set = set(axis_paths)
         kept = []
         for row in self.rows:
@@ -424,9 +257,7 @@ class SweepTable:
                 if spec is None:
                     continue
                 when_clause = _when_clause(spec)
-                if when_clause is None:
-                    continue
-                if not _conditions_met(trial_cfg, when_clause):
+                if when_clause is not None and not _conditions_met(trial_cfg, when_clause):
                     ok = False
                     break
             if ok:
@@ -434,13 +265,6 @@ class SweepTable:
         return kept
 
     def attach_spec(self, search_space):
-        """
-        Attach search_space for filtering lookups.
-
-        Args:
-          search_space: dict
-            Original sweep YAML mapping.
-        """
         self._search_space = search_space
 
     def _spec_for_path(self, path):
@@ -449,34 +273,26 @@ class SweepTable:
         return self._search_space.get(path)
 
 
+def trial_params_for_table(trial):
+    if trial.params:
+        return dict(trial.params)
+    resolved = trial.user_attrs.get("resolved_params")
+    return dict(resolved) if isinstance(resolved, dict) else {}
+
+
+def trial_result_dir(trials_root: Path, trial, trial_params, axis_meta) -> Path:
+    result_path = trial.user_attrs.get("result_path")
+    if isinstance(result_path, str) and result_path:
+        path = Path(result_path)
+        return path if path.is_absolute() else trials_root.parent / path
+    result_dir = trial.user_attrs.get("result_dir")
+    if isinstance(result_dir, str) and result_dir:
+        return Path(result_dir)
+    folder = trial_folder_name(trial_params, {p: axis_meta.get(p, {}) for p in trial_params})
+    return trials_root / folder / "results"
+
+
 def sweep_table_from_study(trials_root, study, search_space, metric_names, directions):
-    """
-    Build a SweepTable by reading numpy artifacts for completed trials and
-    reducing each metric to one scalar per requested direction.
-
-    Args:
-      trials_root: Path
-        Directory containing per-trial folders.
-      study: optuna.study.Study
-        Finished Optuna study.
-      search_space: dict
-        Full sweep mapping for metadata attachment.
-      metric_names: list
-        Metric stems to load from each trial results folder.
-      directions: list
-        Canonical direction names (avg, worse) to compute per metric.
-
-    return: SweepTable
-      Populated table instance.
-    """
-    def trial_params_for_table(trial):
-        if trial.params:
-            return dict(trial.params)
-        resolved = trial.user_attrs.get("resolved_params")
-        if isinstance(resolved, dict):
-            return dict(resolved)
-        return {}
-
     axes, axis_meta = build_axis_metadata(search_space)
     rows = []
     for trial in study.trials:
@@ -485,8 +301,7 @@ def sweep_table_from_study(trials_root, study, search_space, metric_names, direc
         trial_params = trial_params_for_table(trial)
         if not trial_params:
             continue
-        folder = trial_folder_name(trial_params, {p: axis_meta.get(p, {}) for p in trial_params})
-        result_dir = trials_root / folder / "results"
+        result_dir = trial_result_dir(Path(trials_root), trial, trial_params, axis_meta)
         metrics_flat = {}
         for metric in metric_names:
             try:
@@ -496,8 +311,7 @@ def sweep_table_from_study(trials_root, study, search_space, metric_names, direc
                 continue
             for direction in directions:
                 metrics_flat[column_key_for(metric, direction)] = scalar_for_direction(metric, raw, direction)
-        row = SweepRow(params=trial_params, metrics=metrics_flat)
-        rows.append(row)
+        rows.append(SweepRow(params=trial_params, metrics=metrics_flat))
     table = SweepTable(rows)
     table.attach_spec(search_space)
     table.axes_meta = axes
@@ -506,140 +320,96 @@ def sweep_table_from_study(trials_root, study, search_space, metric_names, direc
 
 
 class BaseSweepPlotter(ABC):
-    """Shared plotting utilities for sweep visualizations."""
-
     def __init__(self, table, axes, output_dir):
-        """
-        Initialize plotter.
-
-        Args:
-          table: SweepTable
-            Metric table for all trials.
-          axes: list
-            SweepAxis objects in sweep order.
-          output_dir: Path
-            Root directory for PNG outputs.
-        """
         self.table = table
         self.axes = axes
         self.output_dir = output_dir
 
     def plot(self, metric_names, direction):
-        """
-        Generate all plots for requested metrics under a single direction.
-
-        Args:
-          metric_names: list
-            Metric stems (numpy file stems).
-          direction: str
-            Canonical direction name (avg or worse) used as the scalar
-            reduction and as column-key/file-suffix tag.
-        """
         self.output_dir.mkdir(parents=True, exist_ok=True)
         for metric in metric_names:
-            column = column_key_for(metric, direction)
-            self._plot_metric_column(metric, direction, column)
+            self._plot_metric_column(metric, direction, column_key_for(metric, direction))
 
     @abstractmethod
-    def _plot_metric_column(self, metric, direction, column_key):
-        """
-        Plot all figures for one metric scalar column.
-
-        Args:
-          metric: str
-            Metric stem.
-          direction: str
-            Canonical direction name (avg or worse).
-          column_key: str
-            Column name in SweepRow.metrics.
-        """
-
-    def _axis_by_path(self):
-        lookup = {}
-        for axis in self.axes:
-            lookup[axis.path] = axis
-        return lookup
-
-    def _value_for_row(self, row, path):
-        if path not in row.params:
-            return None
-        return row.params[path]
+    def _plot_metric_column(self, metric, direction, column_key): ...
 
     def auto_subfolder_name(self, parts):
-        """
-        Join labeled path fragments into a filesystem-safe folder name.
-
-        Args:
-          parts: list
-            Tuple-like entries (label, value_token).
-
-        return: str
-          Folder name.
-        """
-        segments = []
-        for label, value in parts:
-            segments.append(f"{_sanitize_token(label)}={_sanitize_token(value)}")
-        return "__".join(segments)
+        return "__".join(f"{_sanitize_token(label)}={_sanitize_token(value)}" for label, value in parts)
 
 
-def plot_sweep(
-    plot_modes,
-    directions,
-    trials_root,
-    study,
-    search_space,
-    metric_names,
-    output_dir,
-):
-    """
-    Dispatch configured sweep plots.
+def optuna_storage_url(output_root: Path) -> str:
+    return f"sqlite:///{output_root / OPTUNA_DB_NAME}"
 
-    For each default plot mode and each default direction the plots are
-    written under output_dir/<mode>/direction=<direction>/...
 
-    Args:
-      trials_root: Path
-        Trial artifact root (contains per-trial folders).
-      study: optuna.study.Study
-        Completed study with trials.
-      search_space: dict
-        Original sweep mapping from YAML.
-      output_dir: Path
-        Destination root folder for PNG outputs.
-    """
-    resolved_modes = normalize_plot_modes(plot_modes)
-    resolved_directions = normalize_directions(directions)
-    resolved_metrics = list(metric_names or DEFAULT_PLOT_METRICS)
+def load_sweep_study(output_root: Path):
+    return optuna.load_study(study_name=STUDY_NAME, storage=optuna_storage_url(output_root))
 
-    table = sweep_table_from_study(
-        trials_root, study, search_space, resolved_metrics, resolved_directions
+
+def plot_config_from_cfg(cfg):
+    plot_cfg = cfg.get("plot")
+    if plot_cfg is not None:
+        return OmegaConf.to_container(plot_cfg, resolve=True)
+    # Legacy shape from older sweep.yaml revisions.
+    return {
+        "enabled": True,
+        "directions": cfg.get("direction"),
+        "modes": cfg.get("plot_mode"),
+        "metrics": cfg.get("plot_metrics"),
+        "heatmaps": [],
+        "per_parameter": {"enabled": "per_parameter" in normalize_plot_modes(cfg.get("plot_mode"))},
+    }
+
+
+def metrics_for_plot(plot_cfg: dict, exclude=()) -> list[str]:
+    metrics = list(plot_cfg.get("metrics") or DEFAULT_PLOT_METRICS)
+    excluded = set(exclude or ())
+    return [metric for metric in metrics if metric not in excluded]
+
+
+def plot_sweep_from_cfg(output_root: Path, cfg, study=None, output_dir: Path | None = None) -> None:
+    if "optuna" not in cfg or "search_space" not in cfg.optuna:
+        raise ValueError("Missing optuna.search_space in sweep config")
+    search_space = OmegaConf.to_container(cfg.optuna.search_space, resolve=True)
+    if not isinstance(search_space, dict) or not search_space:
+        raise ValueError("optuna.search_space must be a non-empty mapping")
+    if study is None:
+        study = load_sweep_study(output_root)
+    plot_cfg = plot_config_from_cfg(cfg)
+    if not bool(plot_cfg.get("enabled", True)):
+        return
+    plot_sweep(
+        plot_cfg=plot_cfg,
+        trials_root=output_root / "trials",
+        study=study,
+        search_space=search_space,
+        output_dir=output_dir or output_root / "sweep_artifacts",
     )
-    axes, _ = build_axis_metadata(search_space)
 
-    for mode in resolved_modes:
-        for direction in resolved_directions:
-            mode_dir = output_dir / mode / f"direction={direction}"
-            plotter = make_sweep_plotter(mode, table, axes, mode_dir)
-            plotter.plot(resolved_metrics, direction)
+
+def plot_sweep(plot_cfg, trials_root, study, search_space, output_dir):
+    directions = normalize_directions(plot_cfg.get("directions"))
+    axes, _ = build_axis_metadata(search_space)
+    all_metrics = metrics_for_plot(plot_cfg)
+    table = sweep_table_from_study(trials_root, study, search_space, all_metrics, directions)
+
+    from banditdl.utils.plot_sweep_heatmap import ExplicitHeatmapPlotter
+    from banditdl.utils.plot_sweep_perparam import PerParamPlotter
+
+    for direction in directions:
+        heatmap_specs = list(plot_cfg.get("heatmaps") or [])
+        if heatmap_specs:
+            plotter = ExplicitHeatmapPlotter(table, axes, output_dir / "heatmap" / f"direction={direction}")
+            for spec in heatmap_specs:
+                plotter.plot_spec(spec, metrics_for_plot(plot_cfg, spec.get("exclude_metrics")), direction)
+
+        per_param_cfg = plot_cfg.get("per_parameter") or {}
+        if bool(per_param_cfg.get("enabled", False)):
+            metrics = metrics_for_plot(plot_cfg, per_param_cfg.get("exclude_metrics"))
+            plotter = PerParamPlotter(table, axes, output_dir / "per_parameter" / f"direction={direction}")
+            plotter.plot(metrics, direction)
 
 
 def make_sweep_plotter(mode, table, axes, output_dir):
-    """
-    Instantiate a sweep plotter for the requested mode.
-
-    Args:
-      mode: str
-        Plot mode key.
-      table: SweepTable
-        Prepared sweep table.
-      axes: list
-        SweepAxis descriptors.
-      output_dir: Path
-        Output directory.
-
-    return: BaseSweepPlotter
-      Concrete plotter instance.
-    """
     from banditdl.utils.plot_sweep_alltogether import AllTogetherPlotter
     from banditdl.utils.plot_sweep_heatmap import HeatmapPlotter
     from banditdl.utils.plot_sweep_perparam import PerParamPlotter

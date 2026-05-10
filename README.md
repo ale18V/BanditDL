@@ -66,44 +66,53 @@ uv run python -m banditdl.experiments.sweep
 Defaults (`conf/sweep.yaml`) compose `conf/config.yaml` plus `conf/optuna/sanitysweep.yaml`.
 
 Behavior:
-- Enumerates every valid Cartesian combination of **categorical** `optuna.search_space` entries (respecting optional `when:` guards).
-- Queues each combo via Optuna `enqueue_trial`, runs one training job per trial.
-- Writes trial artifacts under `<hydra_run>/trials/<param_tokens>/results/` (numpy arrays mirror standard runs).
+- Enumerates every valid Cartesian combination of **categorical** `optuna.search_space` entries, respecting optional `when:` guards.
+- Runs one training job per trial and writes artifacts under `<hydra_run>/trials/<param_tokens>/results/`.
+- Persists the Optuna study to `<hydra_run>/optuna.db`; trial attrs include resolved params, relative result path, and seed.
 - Tracks validation accuracy from `results/validation`, selects the best trial, then re-runs it once with test evaluation under `<hydra_run>/best_trial_test_eval/results`.
-- After all trials finish, renders default sweep plots under `<hydra_run>/sweep_artifacts/`.
+- If `plot.enabled: true`, renders configured sweep plots under `<hydra_run>/sweep_artifacts/`.
 
-Sweep plotting is intentionally defined in Python, not YAML. The default sweep plot set lives in `banditdl/utils/plot_sweep_base.py` and currently generates:
+Sweep plotting is controlled by `conf/sweep.yaml`:
 
-| Mode | Meaning |
-| --- | --- |
-| `per_parameter` | WAY 2 style curves (per-axis grids described in `banditdl/utils/plot_sweep_perparam.py`). |
-| `all_together` | WAY 1 style overlays (`banditdl/utils/plot_sweep_alltogether.py`). |
-| `heatmap` | Pairwise heatmaps (`banditdl/utils/plot_sweep_heatmap.py`). |
-
-Default sweep reductions over timesteps and nodes:
-- `avg`: arithmetic mean over all timesteps and all nodes.
-- `worse`: worst observed value across timesteps and nodes; uses max for
-  metrics where higher is worse (`regret`, `normalized_regret`,
-  `neighbor_disagreement`, `consensus_drift`, `validation_losses`,
-  `train_losses`) and min otherwise (accuracies, rewards).
-
-Plot outputs are written under:
-
-```text
-<hydra_run>/sweep_artifacts/
-  per_parameter/direction=avg/...
-  per_parameter/direction=worse/...
-  all_together/direction=avg/...
-  all_together/direction=worse/...
-  heatmap/direction=avg/...
-  heatmap/direction=worse/...
+```yaml
+plot:
+  enabled: true
+  directions: [avg, worse]
+  heatmaps:
+    - x: heterogeneity.alpha
+      y: topology.sampling
+      group_by:
+        - sampler.name
+        - [sampler.name, sampler.params.epsilon]
+      aggregate_by: avg
+      exclude_metrics: []
+  per_parameter:
+    enabled: false
+    exclude_metrics: []
 ```
 
-If a particular `(metric, mode, direction, fixed-axes)` combination has no
-plottable points (missing arrays or no matching trials), the plot is **skipped
-with a warning** instead of writing a blank PNG.
+Plotting rules:
+- Heatmaps are explicit; the plotter no longer generates every possible axis pair.
+- All known scalar metrics are plotted by default when present in result folders.
+- `exclude_metrics` removes metrics for a specific plot family/spec.
+- `direction` reduces a metric over timesteps/nodes: `avg` or `worse`.
+- `aggregate_by` reduces extra swept dimensions not used by `x`, `y`, or the active `group_by` slice: `avg`, `min`, or `max`.
+- `group_by` creates slices. A string creates one slice per value; a list creates one slice per value combination.
+- `per_parameter` remains available but is disabled by default.
 
-To change sweep plots, edit the Python defaults or run a separate plotting script after the sweep. Experiment parameters and Optuna search spaces remain Hydra-controlled.
+Offline plotting can regenerate sweep plots without rerunning training:
+
+```bash
+uv run python scripts/plot_sweep.py .hydra_runs/<date>/<time>
+```
+
+Use a custom output directory if desired:
+
+```bash
+uv run python scripts/plot_sweep.py .hydra_runs/<date>/<time> --output-dir plots/my_sweep
+```
+
+For larger sweeps:
 
 ```bash
 uv run python -m banditdl.experiments.sweep optuna=sweep
