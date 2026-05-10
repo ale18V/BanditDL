@@ -18,6 +18,7 @@ plot:
         - sampler.name
         - [sampler.name, sampler.params.epsilon]
       aggregate_by: avg
+      render: [heatmap]
       exclude_metrics: []
 
   per_parameter:

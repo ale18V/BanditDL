@@ -85,6 +85,7 @@ plot:
         - sampler.name
         - [sampler.name, sampler.params.epsilon]
       aggregate_by: avg
+      render: [heatmap]
       exclude_metrics: []
   per_parameter:
     enabled: false
@@ -98,6 +99,10 @@ Plotting rules:
 - `direction` reduces a metric over timesteps/nodes: `avg` or `worse`.
 - `aggregate_by` reduces extra swept dimensions not used by `x`, `y`, or the active `group_by` slice: `avg`, `min`, or `max`.
 - `group_by` creates slices. A string creates one slice per value; a list creates one slice per value combination.
+- Heatmap color scales are shared across slices for the same heatmap spec,
+  metric, and direction.
+- `render` defaults to `[heatmap]`; add `heatmap3d` for experimental static
+  3D surfaces under `sweep_artifacts/heatmap3d/`.
 - `per_parameter` remains available but is disabled by default.
 
 Offline plotting can regenerate sweep plots without rerunning training:
