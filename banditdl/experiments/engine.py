@@ -419,7 +419,7 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
                         {"honest_weights": honest_weights, "step": current_step}
                     )
                     if weight is not None:
-                        # Ensure weight is on CPU to match honest_weights if needed
+                        # Ensure weight is on CPU to match honest_weights
                         candidate_weights[neighbor_id] = weight.cpu()
             candidate_ids = list(candidate_weights)
             candidate_values = [candidate_weights[i] for i in candidate_ids]
@@ -453,20 +453,33 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
         # Release honest weights before evaluation/next round to save memory
         del honest_weights
 
-        with torch.no_grad():
-            # Pull updated weights to CPU
-            updated_weights = [w.pull(None).cpu() for w in workers]
-            _raise_if_nonfinite_weights(workers, current_step, "dynamic")
-            neighbor_matrix = selected_round.copy()
-            neighbor_matrix[neighbor_matrix >= args.nb_honests] = -1
-            disagreement = neighbor_disagreement(
-                updated_weights, neighbor_indices=neighbor_matrix
-            )
-            consensus = consensus_drift(updated_weights)
-            # Release updated weights immediately after computing metrics
-            del updated_weights
-        neighbor_disagreement_history.append(disagreement.cpu().numpy())
-        consensus_drift_history.append(consensus.cpu().numpy())
+        # Skip updated_weights and expensive metrics on non-evaluation rounds
+        is_eval_round = args.evaluation_delta > 0 and current_step % args.evaluation_delta == 0
+        is_last_round = current_step == args.rounds
+        
+        if is_eval_round or is_last_round:
+            with torch.no_grad():
+                # Pull to CPU
+                updated_weights = [w.pull(None).cpu() for w in workers]
+                _raise_if_nonfinite_weights(workers, current_step, "dynamic")
+                neighbor_matrix = selected_round.copy()
+                neighbor_matrix[neighbor_matrix >= args.nb_honests] = -1
+                disagreement = neighbor_disagreement(
+                    updated_weights, neighbor_indices=neighbor_matrix
+                )
+                consensus = consensus_drift(updated_weights)
+                # Release updated weights immediately after computing metrics
+                del updated_weights
+            neighbor_disagreement_history.append(disagreement.cpu().numpy())
+            consensus_drift_history.append(consensus.cpu().numpy())
+        else:
+            # Re-use previous values if available to keep history length consistent
+            if neighbor_disagreement_history:
+                neighbor_disagreement_history.append(neighbor_disagreement_history[-1])
+                consensus_drift_history.append(consensus_drift_history[-1])
+            else:
+                neighbor_disagreement_history.append(np.zeros(args.nb_honests))
+                consensus_drift_history.append(np.zeros(args.nb_honests))
         sampler_kl_history.append(sampler_kl_round)
         sampler_min_probability_history.append(sampler_min_probability_round)
         sampler_max_probability_history.append(sampler_max_probability_round)
@@ -737,7 +750,7 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
             honest_neighbors = [i for i in neighbors if i < args.nb_honests]
             byz_neighbors = [i for i in neighbors if i >= args.nb_honests]
             w.num_selected_byz.append(len(byz_neighbors))
-            # Honest weights are on CPU, but aggregate might need them on GPU
+            # Honest weights are on CPU, move to device for aggregation
             honest_neighbor_weights = [honest_weights[i].to(w.device) for i in honest_neighbors]
             if dissensus:
                 byz_weights = [
@@ -770,18 +783,31 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
         # Release honest weights before evaluation/next round to save memory
         del honest_weights
 
-        with torch.no_grad():
-            # Pull updated weights to CPU
-            updated_weights = [w.pull(None).cpu() for w in workers]
-            _raise_if_nonfinite_weights(workers, current_step, "fixed")
-            disagreement = neighbor_disagreement(
-                updated_weights, adjacency=adjacency_honest
-            )
-            consensus = consensus_drift(updated_weights)
-            # Release updated weights immediately after computing metrics
-            del updated_weights
-        neighbor_disagreement_history.append(disagreement.cpu().numpy())
-        consensus_drift_history.append(consensus.cpu().numpy())
+        # Skip updated_weights and expensive metrics on non-evaluation rounds
+        is_eval_round = args.evaluation_delta > 0 and current_step % args.evaluation_delta == 0
+        is_last_round = current_step == args.rounds
+        
+        if is_eval_round or is_last_round:
+            with torch.no_grad():
+                # Pull to CPU
+                updated_weights = [w.pull(None).cpu() for w in workers]
+                _raise_if_nonfinite_weights(workers, current_step, "fixed")
+                disagreement = neighbor_disagreement(
+                    updated_weights, adjacency=adjacency_honest
+                )
+                consensus = consensus_drift(updated_weights)
+                # Release updated weights immediately after computing metrics
+                del updated_weights
+            neighbor_disagreement_history.append(disagreement.cpu().numpy())
+            consensus_drift_history.append(consensus.cpu().numpy())
+        else:
+            # Re-use previous values if available to keep history length consistent
+            if neighbor_disagreement_history:
+                neighbor_disagreement_history.append(neighbor_disagreement_history[-1])
+                consensus_drift_history.append(consensus_drift_history[-1])
+            else:
+                neighbor_disagreement_history.append(np.zeros(args.nb_honests))
+                consensus_drift_history.append(np.zeros(args.nb_honests))
 
     final_accuracy, final_validation_loss, final_train_loss = (
         _record_final_evaluation_if_needed(
