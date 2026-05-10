@@ -1,12 +1,88 @@
 #!/usr/bin/env python3
 """Plot saved experiment results from one or more run directories."""
-
-from __future__ import annotations
-
 import argparse
+from collections.abc import Sequence
 from pathlib import Path
+from textwrap import shorten
 
-from banditdl.utils.plotting import plot_runs
+from banditdl.utils.metrics import MetricLoader, max_, mean
+from banditdl.utils.plotting import (
+    StandardPlotter,
+    _mark_first_nonfinite,
+    _sampler_aggressiveness_panels,
+    np,
+    plt,
+)
+
+def plot_runs(
+    run_dirs: Sequence[Path],
+    output: Path,
+    metric: str,
+    stat: str,
+    title: str | None,
+    labels: Sequence[str] | None,
+    aggregate: bool,
+    legend: str,
+    max_label_length: int,
+) -> None:
+    """Small CLI-compatible helper for ad hoc single-metric plots."""
+    if metric == "sampler_aggressiveness":
+        if len(run_dirs) != 1:
+            raise ValueError("sampler_aggressiveness expects exactly one run directory")
+        StandardPlotter(run_dirs[0], output, title).plot(
+            "sampler_aggressiveness.png", _sampler_aggressiveness_panels()
+        )
+        return
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    if labels and len(labels) != len(run_dirs):
+        raise SystemExit("--label must be passed once per run directory")
+
+    series = []
+    for idx, run_dir in enumerate(run_dirs):
+        loader = MetricLoader(run_dir)
+        data = loader.load(
+            metric,
+            interpolate_eval=metric
+            in {"accuracies", "val_accuracy", "validation_accuracies"},
+        )
+        values = data.values
+        if values.ndim > 1:
+            reducer = max_ if stat == "worst" else mean
+            y = reducer.fn(values)
+        else:
+            y = values
+        label = labels[idx] if labels else Path(run_dir).name
+        label = shorten(label, width=max_label_length, placeholder="...")
+        series.append((data.x, y, label))
+
+    if aggregate:
+        length = min(len(y) for _, y, _ in series)
+        x = series[0][0][:length]
+        stacked = np.stack([y[:length] for _, y, _ in series])
+        y = np.nanmean(stacked, axis=0)
+        std = np.nanstd(stacked, axis=0)
+        label = labels[0] if labels else f"{metric} {stat}"
+        ax.plot(x, y, marker="o", linewidth=1.7, label=label)
+        ax.fill_between(x, y - std, y + std, alpha=0.2)
+    else:
+        for x, y, label in series:
+            ax.plot(x, y, marker="o", linewidth=1.7, label=label)
+            _mark_first_nonfinite(ax, x, y)
+
+    ax.set_title(title or str(metric).replace("_", " ").title())
+    ax.set_xlabel("Round")
+    ax.grid(True, alpha=0.25)
+    if legend != "none":
+        ax.legend(
+            loc="best" if legend == "best" else "upper center",
+            frameon=False,
+            fontsize=8,
+        )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(output, dpi=160, bbox_inches="tight")
+    plt.close(fig)
 
 
 def main() -> None:

@@ -1,10 +1,7 @@
-from __future__ import annotations
-
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 import re
-from textwrap import shorten
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -83,12 +80,15 @@ def _mark_first_nonfinite(ax, x: np.ndarray, y: np.ndarray) -> None:
 
 
 class StandardPlotter:
-    def __init__(self, run_dir: Path, run_label: str | None = None):
+    def __init__(self, run_dir: Path, output_dir: Path, run_label: str | None = None):
         self.run_dir = Path(run_dir)
+        self.output_dir = Path(output_dir)
         self.run_label = run_label or ""
         self.loader = MetricLoader(self.run_dir)
 
-    def plot(self, output: Path, panels: Sequence[Panel]) -> Path:
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def plot(self, name: str, panels: Sequence[Panel]) -> Path:
         if not panels:
             raise ValueError("At least one panel is required")
 
@@ -121,9 +121,13 @@ class StandardPlotter:
                         fontsize=9,
                     )
             ax.grid(True, alpha=0.25)
-            ax.legend(loc="best", ncols=min(4, len(panel.series)), frameon=False, fontsize=8)
+            ax.legend(
+                loc="best", ncols=min(4, len(panel.series)), frameon=False, fontsize=8
+            )
 
-        if any(series.aggregate is not None for panel in panels for series in panel.series):
+        if any(
+            series.aggregate is not None for panel in panels for series in panel.series
+        ):
             fig.text(
                 0.5,
                 0.01,
@@ -136,7 +140,7 @@ class StandardPlotter:
         else:
             rect = (0.0, 0.03, 1.0, 0.97)
 
-        output.parent.mkdir(parents=True, exist_ok=True)
+        output = self.output_dir / name
         fig.tight_layout(rect=rect)
         fig.savefig(output, dpi=160, bbox_inches="tight")
         plt.close(fig)
@@ -144,7 +148,9 @@ class StandardPlotter:
 
     def _draw_panel(self, ax, panel: Panel) -> None:
         for series in panel.series:
-            data = self.loader.load(series.metric, interpolate_eval=series.interpolate_eval)
+            data = self.loader.load(
+                series.metric, interpolate_eval=series.interpolate_eval
+            )
             values = data.values
             if series.transform is not None:
                 values = series.transform(values)
@@ -169,11 +175,18 @@ class StandardPlotter:
         if values.ndim == 1:
             return values
         if series.aggregate is None:
-            raise ValueError(f"Series '{series.label}' for {series.metric} needs an aggregation")
+            raise ValueError(
+                f"Series '{series.label}' for {series.metric} needs an aggregation"
+            )
         return series.aggregate.fn(values)
 
 
-def _node_series(metric: MetricKey | str, *, transform: Transform | None = None, interpolate_eval: bool = False) -> list[Series]:
+def _node_series(
+    metric: MetricKey | str,
+    *,
+    transform: Transform | None = None,
+    interpolate_eval: bool = False,
+) -> list[Series]:
     return [
         Series(metric, "average", mean, transform, interpolate_eval=interpolate_eval),
         Series(metric, "max", max_, transform, interpolate_eval=interpolate_eval),
@@ -184,23 +197,39 @@ def _node_series(metric: MetricKey | str, *, transform: Transform | None = None,
 
 def _sampler_aggressiveness_panels() -> list[Panel]:
     return [
-        Panel("Sampler Aggressiveness", "KL(bandit || uniform)", _node_series(MetricKey.SAMPLER_KL_TO_UNIFORM)),
+        Panel(
+            "Sampler Aggressiveness",
+            "KL(sampler || uniform)",
+            _node_series(MetricKey.SAMPLER_KL_TO_UNIFORM),
+        ),
         Panel(
             "Sampler Probability Range",
             "Probability",
             [
-                Series(MetricKey.SAMPLER_MAX_PROBABILITY, "max probability", max_, color="tab:red", marker=False),
-                Series(MetricKey.SAMPLER_MIN_PROBABILITY, "min probability", min_, color="tab:blue", marker=False),
+                Series(
+                    MetricKey.SAMPLER_MAX_PROBABILITY,
+                    "max probability",
+                    max_,
+                    color="tab:red",
+                    marker=False,
+                ),
+                Series(
+                    MetricKey.SAMPLER_MIN_PROBABILITY,
+                    "min probability",
+                    min_,
+                    color="tab:blue",
+                    marker=False,
+                ),
             ],
         ),
     ]
 
 
 def plot_all(run_dir: Path, plots_dir: Path, run_label: str) -> None:
-    plotter = StandardPlotter(run_dir, run_label)
+    plotter = StandardPlotter(run_dir, plots_dir, run_label)
 
     plotter.plot(
-        plots_dir / "val_accuracy.png",
+        "val_accuracy.png",
         [
             Panel(
                 "Validation Accuracy",
@@ -212,32 +241,50 @@ def plot_all(run_dir: Path, plots_dir: Path, run_label: str) -> None:
     )
 
     plotter.plot(
-        plots_dir / "validation_loss.png",
-        [Panel("Validation Loss", "Loss", [Series(MetricKey.VALIDATION_LOSS, "validation loss")])],
+        "validation_loss.png",
+        [
+            Panel(
+                "Validation Loss",
+                "Loss",
+                [Series(MetricKey.VALIDATION_LOSS, "validation loss")],
+            )
+        ],
     )
 
     plotter.plot(
-        plots_dir / "train_loss.png",
+        "train_loss.png",
         [Panel("Training Loss", "Loss", [Series(MetricKey.TRAIN_LOSS, "train loss")])],
     )
 
     plotter.plot(
-        plots_dir / "neighbor_disagreement.png",
-        [Panel("Neighbor Disagreement", "Neighbor disagreement", _node_series(MetricKey.NEIGHBOR_DISAGREEMENT))],
+        "neighbor_disagreement.png",
+        [
+            Panel(
+                "Neighbor Disagreement",
+                "Neighbor disagreement",
+                _node_series(MetricKey.NEIGHBOR_DISAGREEMENT),
+            )
+        ],
     )
 
     plotter.plot(
-        plots_dir / "consensus_drift.png",
-        [Panel("Consensus Drift", "Consensus drift", _node_series(MetricKey.CONSENSUS_DRIFT))],
+        "consensus_drift.png",
+        [
+            Panel(
+                "Consensus Drift",
+                "Consensus drift",
+                _node_series(MetricKey.CONSENSUS_DRIFT),
+            )
+        ],
     )
 
     plotter.plot(
-        plots_dir / "sampler_aggressiveness.png",
+        "sampler_aggressiveness.png",
         _sampler_aggressiveness_panels(),
     )
 
     plotter.plot(
-        plots_dir / "reward.png",
+        "reward.png",
         [
             Panel(
                 "Reward",
@@ -274,7 +321,7 @@ def plot_all(run_dir: Path, plots_dir: Path, run_label: str) -> None:
     )
 
     plotter.plot(
-        plots_dir / "regret.png",
+        "regret.png",
         [
             Panel("Regret", "Regret", _node_series(MetricKey.REGRET)),
             Panel(
@@ -284,64 +331,3 @@ def plot_all(run_dir: Path, plots_dir: Path, run_label: str) -> None:
             ),
         ],
     )
-
-
-def plot_runs(
-    run_dirs: Sequence[Path],
-    output: Path,
-    metric: str,
-    stat: str,
-    title: str | None,
-    labels: Sequence[str] | None,
-    aggregate: bool,
-    legend: str,
-    max_label_length: int,
-) -> None:
-    """Small CLI-compatible helper for ad hoc single-metric plots."""
-    if metric == "sampler_aggressiveness":
-        if len(run_dirs) != 1:
-            raise ValueError("sampler_aggressiveness expects exactly one run directory")
-        StandardPlotter(run_dirs[0], title).plot(output, _sampler_aggressiveness_panels())
-        return
-
-    fig, ax = plt.subplots(figsize=(7, 4.5))
-    if labels and len(labels) != len(run_dirs):
-        raise SystemExit("--label must be passed once per run directory")
-
-    series = []
-    for idx, run_dir in enumerate(run_dirs):
-        loader = MetricLoader(run_dir)
-        data = loader.load(metric, interpolate_eval=metric in {"accuracies", "val_accuracy", "validation_accuracies"})
-        values = data.values
-        if values.ndim > 1:
-            reducer = max_ if stat == "worst" else mean
-            y = reducer.fn(values)
-        else:
-            y = values
-        label = labels[idx] if labels else Path(run_dir).name
-        label = shorten(label, width=max_label_length, placeholder="...")
-        series.append((data.x, y, label))
-
-    if aggregate:
-        length = min(len(y) for _, y, _ in series)
-        x = series[0][0][:length]
-        stacked = np.stack([y[:length] for _, y, _ in series])
-        y = np.nanmean(stacked, axis=0)
-        std = np.nanstd(stacked, axis=0)
-        label = labels[0] if labels else f"{metric} {stat}"
-        ax.plot(x, y, marker="o", linewidth=1.7, label=label)
-        ax.fill_between(x, y - std, y + std, alpha=0.2)
-    else:
-        for x, y, label in series:
-            ax.plot(x, y, marker="o", linewidth=1.7, label=label)
-            _mark_first_nonfinite(ax, x, y)
-
-    ax.set_title(title or str(metric).replace("_", " ").title())
-    ax.set_xlabel("Round")
-    ax.grid(True, alpha=0.25)
-    if legend != "none":
-        ax.legend(loc="best" if legend == "best" else "upper center", frameon=False, fontsize=8)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(output, dpi=160, bbox_inches="tight")
-    plt.close(fig)
