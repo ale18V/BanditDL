@@ -27,6 +27,55 @@ DEFAULT_PLOT_METRICS: tuple[str, ...] = (
 DEFAULT_DIRECTIONS: tuple[str, ...] = ("avg", "worse")
 DEFAULT_PLOT_MODES: tuple[str, ...] = ("per_parameter", "all_together", "heatmap")
 
+_DIRECTION_ALIASES = {
+    "avg": "avg",
+    "mean": "avg",
+    "average": "avg",
+    "worse": "worse",
+    "worst": "worse",
+}
+
+
+def normalize_direction(value):
+    token = str(value).lower().strip()
+    if token not in _DIRECTION_ALIASES:
+        raise ValueError(
+            f"Unsupported direction '{value}'. Allowed: avg, mean, average, worse, worst."
+        )
+    return _DIRECTION_ALIASES[token]
+
+
+def normalize_directions(value):
+    if value is None:
+        return list(DEFAULT_DIRECTIONS)
+    raw = OmegaConf.to_container(value, resolve=True) if OmegaConf.is_config(value) else value
+    if isinstance(raw, str) or not isinstance(raw, (list, tuple)):
+        raw = [raw]
+    directions = []
+    for item in raw:
+        direction = normalize_direction(item)
+        if direction not in directions:
+            directions.append(direction)
+    return directions or list(DEFAULT_DIRECTIONS)
+
+
+def normalize_plot_modes(value):
+    if value is None:
+        return list(DEFAULT_PLOT_MODES)
+    raw = OmegaConf.to_container(value, resolve=True) if OmegaConf.is_config(value) else value
+    if isinstance(raw, str) or not isinstance(raw, (list, tuple)):
+        raw = [raw]
+    modes = []
+    for item in raw:
+        mode = str(item).lower().strip()
+        if mode not in DEFAULT_PLOT_MODES:
+            raise ValueError(
+                f"Unsupported plot_mode '{item}'. Allowed: {', '.join(DEFAULT_PLOT_MODES)}."
+            )
+        if mode not in modes:
+            modes.append(mode)
+    return modes or list(DEFAULT_PLOT_MODES)
+
 
 def _strip_meta(spec):
     """
@@ -533,9 +582,17 @@ class BaseSweepPlotter(ABC):
         return "__".join(segments)
 
 
-def plot_sweep(trials_root, study, search_space, output_dir):
+def plot_sweep(
+    plot_modes,
+    directions,
+    trials_root,
+    study,
+    search_space,
+    metric_names,
+    output_dir,
+):
     """
-    Dispatch the code-defined default sweep plots.
+    Dispatch configured sweep plots.
 
     For each default plot mode and each default direction the plots are
     written under output_dir/<mode>/direction=<direction>/...
@@ -550,15 +607,17 @@ def plot_sweep(trials_root, study, search_space, output_dir):
       output_dir: Path
         Destination root folder for PNG outputs.
     """
-    resolved_metrics = list(DEFAULT_PLOT_METRICS)
+    resolved_modes = normalize_plot_modes(plot_modes)
+    resolved_directions = normalize_directions(directions)
+    resolved_metrics = list(metric_names or DEFAULT_PLOT_METRICS)
 
     table = sweep_table_from_study(
-        trials_root, study, search_space, resolved_metrics, list(DEFAULT_DIRECTIONS)
+        trials_root, study, search_space, resolved_metrics, resolved_directions
     )
     axes, _ = build_axis_metadata(search_space)
 
-    for mode in DEFAULT_PLOT_MODES:
-        for direction in DEFAULT_DIRECTIONS:
+    for mode in resolved_modes:
+        for direction in resolved_directions:
             mode_dir = output_dir / mode / f"direction={direction}"
             plotter = make_sweep_plotter(mode, table, axes, mode_dir)
             plotter.plot(resolved_metrics, direction)
