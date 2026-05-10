@@ -389,7 +389,8 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
 
         for w in workers:
             w.train()
-        honest_weights = [w.pull(None) for w in workers]
+        # Move honest weights to CPU to save GPU memory
+        honest_weights = [w.pull(None).cpu() for w in workers]
 
         selected_round = np.full(
             (args.nb_honests, workers[0].nb_neighbors), -1, dtype=int
@@ -418,14 +419,16 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
                         {"honest_weights": honest_weights, "step": current_step}
                     )
                     if weight is not None:
-                        candidate_weights[neighbor_id] = weight
+                        # Ensure weight is on CPU to match honest_weights if needed
+                        candidate_weights[neighbor_id] = weight.cpu()
             candidate_ids = list(candidate_weights)
             candidate_values = [candidate_weights[i] for i in candidate_ids]
-            candidate_rewards = w.reward_strategy.score(w.pull(None), candidate_values)
+            candidate_rewards = w.reward_strategy.score(w.pull(None).cpu(), candidate_values)
             rewards_by_id = dict(zip(candidate_ids, candidate_rewards, strict=True))
             cumulative_arm_rewards[w.worker_id, candidate_ids] += candidate_rewards
 
-            neighbor_weights = [candidate_weights[i] for i in selected_neighbor_ids]
+            # Move neighbor weights back to GPU for aggregation
+            neighbor_weights = [candidate_weights[i].to(w.device) for i in selected_neighbor_ids]
             byz_neighbor_ids = [
                 i for i in selected_neighbor_ids if i >= args.nb_honests
             ]
@@ -443,8 +446,16 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
             w.observe_neighbors(selected_neighbor_ids, neighbor_weights)
             w.aggregate(neighbor_weights)
 
+            # Aggressively clear temporary tensor references
+            del candidate_weights, candidate_values, neighbor_weights
+            if "weight" in locals(): del weight
+
+        # Release honest weights before evaluation/next round to save memory
+        del honest_weights
+
         with torch.no_grad():
-            updated_weights = [w.pull(None) for w in workers]
+            # Pull updated weights to CPU
+            updated_weights = [w.pull(None).cpu() for w in workers]
             _raise_if_nonfinite_weights(workers, current_step, "dynamic")
             neighbor_matrix = selected_round.copy()
             neighbor_matrix[neighbor_matrix >= args.nb_honests] = -1
@@ -452,6 +463,8 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
                 updated_weights, neighbor_indices=neighbor_matrix
             )
             consensus = consensus_drift(updated_weights)
+            # Release updated weights immediately after computing metrics
+            del updated_weights
         neighbor_disagreement_history.append(disagreement.cpu().numpy())
         consensus_drift_history.append(consensus.cpu().numpy())
         sampler_kl_history.append(sampler_kl_round)
@@ -564,6 +577,13 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
         np.array(sampler_max_probability_history),
     )
     _log_done("dynamic")
+
+    # Final memory cleanup
+    import gc
+    del workers
+    gc.collect()
+    if args.device != "cpu":
+        torch.cuda.empty_cache()
 
 
 def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) -> None:
@@ -709,22 +729,24 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
 
         for w in workers:
             w.train()
-        honest_weights = [w.pull(None) for w in workers]
+        # Move honest weights to CPU to save GPU memory
+        honest_weights = [w.pull(None).cpu() for w in workers]
 
         for w in workers:
             neighbors = list(w.comm_graph.neighbors(w.worker_id)) + [w.worker_id]
             honest_neighbors = [i for i in neighbors if i < args.nb_honests]
             byz_neighbors = [i for i in neighbors if i >= args.nb_honests]
             w.num_selected_byz.append(len(byz_neighbors))
-            honest_neighbor_weights = [honest_weights[i] for i in honest_neighbors]
+            # Honest weights are on CPU, but aggregate might need them on GPU
+            honest_neighbor_weights = [honest_weights[i].to(w.device) for i in honest_neighbors]
             if dissensus:
                 byz_weights = [
                     dec_byz_workers[i].pull(
                         {
                             "target": w.worker_id,
                             "honest_neighbors": honest_neighbors,
-                            "pivot_params": w.pull(None),
-                            "honest_local_params": honest_neighbor_weights,
+                            "pivot_params": w.pull(None), # Already on device
+                            "honest_local_params": honest_neighbor_weights, # Already on device
                         }
                     )
                     for i in byz_neighbors
@@ -734,7 +756,7 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
                     [
                         byz_workers[byz_neighbor].pull(
                             {"honest_weights": honest_weights, "step": current_step}
-                        )
+                        ).to(w.device)
                         for byz_neighbor in byz_neighbors
                     ]
                     if byz_neighbors
@@ -742,13 +764,22 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
                 )
             w.aggregate(honest_neighbor_weights + byz_weights)
 
+            # Aggressively clear temporary tensor references
+            del honest_neighbor_weights, byz_weights
+
+        # Release honest weights before evaluation/next round to save memory
+        del honest_weights
+
         with torch.no_grad():
-            updated_weights = [w.pull(None) for w in workers]
+            # Pull updated weights to CPU
+            updated_weights = [w.pull(None).cpu() for w in workers]
             _raise_if_nonfinite_weights(workers, current_step, "fixed")
             disagreement = neighbor_disagreement(
                 updated_weights, adjacency=adjacency_honest
             )
             consensus = consensus_drift(updated_weights)
+            # Release updated weights immediately after computing metrics
+            del updated_weights
         neighbor_disagreement_history.append(disagreement.cpu().numpy())
         consensus_drift_history.append(consensus.cpu().numpy())
 
@@ -805,3 +836,10 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
         np.array(consensus_drift_history),
     )
     _log_done("fixed")
+
+    # Final memory cleanup
+    import gc
+    del workers
+    gc.collect()
+    if args.device != "cpu":
+        torch.cuda.empty_cache()

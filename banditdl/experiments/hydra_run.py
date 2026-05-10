@@ -19,26 +19,34 @@ def main(cfg: DictConfig) -> None:
 
     output_dir = pathlib.Path(HydraConfig.get().runtime.output_dir)
     result_dir = output_dir / "results"
-    if run_cfg.run_mode == "dynamic":
-        run_dynamic(
-            params=run_cfg.params,
-            result_dir=result_dir,
-            seed=int(cfg.seed),
-            device=device,
-        )
-    else:
-        run_fixed(
-            params=run_cfg.params,
-            result_dir=result_dir,
-            seed=int(cfg.seed),
-            device=device,
-        )
+    try:
+        if run_cfg.run_mode == "dynamic":
+            run_dynamic(
+                params=run_cfg.params,
+                result_dir=result_dir,
+                seed=int(cfg.seed),
+                device=device,
+            )
+        else:
+            run_fixed(
+                params=run_cfg.params,
+                result_dir=result_dir,
+                seed=int(cfg.seed),
+                device=device,
+            )
 
-    plot_all(
-        run_dir=result_dir,
-        plots_dir=output_dir / "plots",
-        run_label=run_cfg.run_name,
-    )
+        plot_all(
+            run_dir=result_dir,
+            plots_dir=output_dir / "plots",
+            run_label=run_cfg.run_name,
+        )
+    finally:
+        # Explicitly clear memory to prevent accumulation across Hydra multirun jobs
+        import gc
+        import torch
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":

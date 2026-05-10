@@ -17,14 +17,28 @@ from banditdl.utils.math_utils import (
 )
 
 
+def _mean_inplace(vectors):
+    if not vectors:
+        return None
+    res = vectors[0].clone()
+    for i in range(1, len(vectors)):
+        res.add_(vectors[i])
+    res.div_(len(vectors))
+    return res
+
+
 def average(_, vectors):
-    return torch.stack(vectors).mean(dim=0)
+    return _mean_inplace(vectors)
 
 
 def trmean(aggregator, vectors):
     if aggregator.nb_byz == 0:
-        return torch.stack(vectors).mean(dim=0)
-    return torch.stack(vectors).sort(dim=0).values[aggregator.nb_byz:-aggregator.nb_byz].mean(dim=0)
+        return _mean_inplace(vectors)
+    # Sort requires stacking
+    stacked = torch.stack(vectors)
+    res = stacked.sort(dim=0).values[aggregator.nb_byz:-aggregator.nb_byz].mean(dim=0)
+    del stacked
+    return res
 
 
 def median(_, vectors):
@@ -64,16 +78,21 @@ def multi_krum(aggregator, vectors):
     scores = get_vector_scores(vectors, aggregator.nb_byz, distances)
     best_vectors = [vectors[worker_id] for _, worker_id in scores[:k]]
     #JS: return the average of the k vectors with lowest scores
-    return torch.stack(best_vectors).mean(dim=0)
+    return _mean_inplace(best_vectors)
 
 
 def nearest_neighbor_mixing(aggregator, vectors, numb_iter=1):
-    vectors = torch.stack(vectors)
+    if not isinstance(vectors, torch.Tensor):
+        vectors = torch.stack(vectors)
     for _ in range(numb_iter):
         # SY: Replace every vector by the average of its nearest neighbors
-        vectors = average_nearest_neighbors(vectors, aggregator.nb_byz)
+        new_vectors = average_nearest_neighbors(vectors, aggregator.nb_byz)
+        del vectors
+        vectors = new_vectors
 
-    return robust_aggregators[aggregator.second_aggregator](aggregator, torch.unbind(vectors))
+    res = robust_aggregators[aggregator.second_aggregator](aggregator, list(torch.unbind(vectors)))
+    del vectors
+    return res
 
 
 nneighbor_means = nearest_neighbor_mixing
@@ -121,7 +140,7 @@ def bucketing(aggregator, vectors):
         start_index = i * aggregator.bucket_size
         end_index = min((i + 1) * aggregator.bucket_size, aggregator.nb_workers)
         bucket = vectors[start_index:end_index]
-        avg_buckets.append(torch.stack(bucket).mean(dim=0))
+        avg_buckets.append(_mean_inplace(bucket))
     return robust_aggregators[aggregator.second_aggregator](aggregator, avg_buckets)
 
 
@@ -171,7 +190,7 @@ def pseudo_multi_krum(aggregator, vectors):
         k_vectors.append(vectors[min_index])
 
     #JS: return the average of the k vectors
-    return torch.stack(k_vectors).mean(dim=0)
+    return _mean_inplace(k_vectors)
 
 
 def centered_clipping(aggregator, vectors, L_iter=3, clip_thresh=1):
@@ -193,7 +212,7 @@ def centered_clipping(aggregator, vectors, L_iter=3, clip_thresh=1):
 def minimum_diameter_averaging(aggregator, vectors):
     selected_subset = compute_min_diameter_subset(vectors, aggregator.nb_workers, aggregator.nb_byz)
     selected_vectors = [vectors[j] for j in selected_subset]
-    return torch.stack(selected_vectors).mean(dim=0)
+    return _mean_inplace(selected_vectors)
 
 
 mda = minimum_diameter_averaging
@@ -202,7 +221,7 @@ mda = minimum_diameter_averaging
 def minimum_variance_averaging(aggregator, vectors):
     selected_subset = compute_min_variance_subset(vectors, aggregator.nb_workers, aggregator.nb_byz)
     selected_vectors = [vectors[j] for j in selected_subset]
-    return torch.stack(selected_vectors).mean(dim=0)
+    return _mean_inplace(selected_vectors)
 
 
 mva = minimum_variance_averaging
@@ -221,7 +240,9 @@ def meamed(aggregator, vectors):
     #JS: compute and aggregate (n-f) vectors closest to median (per dimension)
     bottom_indices = vectors_stacked.sub(median_vector).abs().topk(nb_honest, dim=0, largest=False, sorted=False).indices
     bottom_indices.mul_(dimension).add_(torch.arange(0, dimension, dtype=bottom_indices.dtype, device=bottom_indices.device))
-    return vectors_stacked.take(bottom_indices).mean(dim=0)
+    res = vectors_stacked.take(bottom_indices).mean(dim=0)
+    del vectors_stacked
+    return res
 
 
 #JS: Dictionary mapping every aggregator to its corresponding function
