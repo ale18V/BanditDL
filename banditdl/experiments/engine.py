@@ -244,7 +244,15 @@ def _best_fixed_subset(scores, worker_id: int, k: int):
     scores = np.asarray(scores, dtype=float)
     candidates = [i for i in range(len(scores)) if i != worker_id]
     selected = sorted(candidates, key=lambda i: scores[i], reverse=True)[:k]
-    return np.array(selected, dtype=int), float(scores[selected].sum())
+    reward = 0.0 if not selected else float(scores[selected].sum() / len(selected))
+    return np.array(selected, dtype=int), reward
+
+
+def _mean_selected_reward(rewards) -> float:
+    rewards = list(rewards)
+    if not rewards:
+        return 0.0
+    return float(sum(rewards) / len(rewards))
 
 
 def _dynamic_candidate_weights(w, honest_weights, byz_workers, current_step):
@@ -345,6 +353,8 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
     sampler_kl_history = []
     sampler_min_probability_history = []
     sampler_max_probability_history = []
+    selected_reward_min_history = []
+    selected_reward_max_history = []
 
     for current_step in range(args.rounds + 1):
         mean_validation_accuracy = None
@@ -387,6 +397,8 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
         sampler_kl_round = np.zeros(args.nb_honests)
         sampler_min_probability_round = np.zeros(args.nb_honests)
         sampler_max_probability_round = np.zeros(args.nb_honests)
+        selected_reward_min_round = np.full(args.nb_honests, np.nan)
+        selected_reward_max_round = np.full(args.nb_honests, np.nan)
         for w in workers:
             (
                 sampler_kl_round[w.worker_id],
@@ -420,9 +432,13 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
             selected_round[w.worker_id, : len(selected_neighbor_ids)] = (
                 selected_neighbor_ids
             )
-            cumulative_algorithm_rewards[w.worker_id] += sum(
-                rewards_by_id[i] for i in selected_neighbor_ids
-            )
+            selected_rewards = [rewards_by_id[i] for i in selected_neighbor_ids]
+            if selected_rewards:
+                selected_reward_min_round[w.worker_id] = min(selected_rewards)
+                selected_reward_max_round[w.worker_id] = max(selected_rewards)
+                cumulative_algorithm_rewards[w.worker_id] += _mean_selected_reward(
+                    selected_rewards
+                )
             w.num_selected_byz.append(len(byz_neighbor_ids))
             w.observe_neighbors(selected_neighbor_ids, neighbor_weights)
             w.aggregate(neighbor_weights)
@@ -441,6 +457,8 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
         sampler_kl_history.append(sampler_kl_round)
         sampler_min_probability_history.append(sampler_min_probability_round)
         sampler_max_probability_history.append(sampler_max_probability_round)
+        selected_reward_min_history.append(selected_reward_min_round)
+        selected_reward_max_history.append(selected_reward_max_round)
 
         oracle_neighbors = []
         oracle_rewards_round = []
@@ -509,6 +527,14 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
     np.save(os.path.join(result_dir, "reward_algorithm.npy"), algorithm_rewards)
     np.save(os.path.join(result_dir, "reward_oracle.npy"), oracle_rewards)
     np.save(os.path.join(result_dir, "regret.npy"), regret)
+    np.save(
+        os.path.join(result_dir, "reward_selected_min.npy"),
+        np.array(selected_reward_min_history),
+    )
+    np.save(
+        os.path.join(result_dir, "reward_selected_max.npy"),
+        np.array(selected_reward_max_history),
+    )
     np.save(
         os.path.join(result_dir, "selected_neighbors.npy"),
         np.array(selected_neighbor_history, dtype=int),

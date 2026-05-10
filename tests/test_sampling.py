@@ -77,4 +77,4 @@ def test_best_fixed_subset_excludes_self():
     selected, reward = _best_fixed_subset(torch.tensor([0.9, 0.5, 0.8, 0.1]), 0, 2)
 
     assert selected.tolist() == [2, 1]
-    assert reward == pytest.approx(1.3)
+    assert reward == pytest.approx(0.65)

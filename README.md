@@ -335,7 +335,10 @@ Useful options:
 - `--metric eval|eval_worst`: legacy aliases for older run folders.
 - `--metric regret`: plot regret against the best fixed neighbor subset in hindsight.
 - `--metric normalized_regret`: plot time-averaged regret, derived from `regret.npy`.
-- `--metric reward_algorithm|reward_oracle`: plot cumulative reward curves.
+- `--metric reward_algorithm|reward_oracle`: plot cumulative reward curves,
+  normalized by sampled-neighbor count.
+- `--metric reward_selected_min|reward_selected_max`: plot per-round selected
+  neighbor reward extrema.
 - `--metric neighbor_disagreement`: plot mean/median/max neighbor disagreement over rounds.
 - `--metric consensus_drift`: plot mean/median/max drift from the global average model.
 - `--metric sampler_aggressiveness`: plot KL to uniform plus min/max sampler probabilities.
@@ -508,10 +511,14 @@ Current bandit feedback:
 - `parameter_distance` uses `1 / (1 + parameter_distance)` against the local model before aggregation.
 
 Dynamic runs also save hindsight diagnostics for every sampler, including uniform:
-- `reward_algorithm.npy`: cumulative reward achieved by sampled neighbors.
-- `reward_oracle.npy`: cumulative reward of the best fixed neighbor subset in hindsight.
+- `reward_algorithm.npy`: cumulative reward achieved by sampled neighbors,
+  normalized by sampled-neighbor count.
+- `reward_oracle.npy`: cumulative reward of the best fixed neighbor subset in
+  hindsight, normalized by sampled-neighbor count.
 - `regret.npy`: `reward_oracle - reward_algorithm`.
 - time-averaged regret is derived from `regret.npy` when plotting.
+- `reward_selected_min.npy`: per-round, per-node minimum reward among selected neighbors.
+- `reward_selected_max.npy`: per-round, per-node maximum reward among selected neighbors.
 - `selected_neighbors.npy`: sampled neighbors per round and worker.
 - `oracle_neighbors.npy`: best fixed hindsight neighbors per round and worker.
 - `sampler_kl_to_uniform.npy`: per-round, per-node KL divergence from the sampler distribution to uniform.

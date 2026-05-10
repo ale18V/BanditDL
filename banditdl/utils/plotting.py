@@ -321,6 +321,22 @@ def plot_all(run_dir: Path, plots_dir: Path, run_label: str) -> None:
     )
 
     plotter.plot(
+        "reward_extrema.png",
+        [
+            Panel(
+                "Selected Neighbor Max Reward",
+                "Reward",
+                _node_series(MetricKey.REWARD_SELECTED_MAX),
+            ),
+            Panel(
+                "Selected Neighbor Min Reward",
+                "Reward",
+                _node_series(MetricKey.REWARD_SELECTED_MIN),
+            ),
+        ],
+    )
+
+    plotter.plot(
         "regret.png",
         [
             Panel("Regret", "Regret", _node_series(MetricKey.REGRET)),

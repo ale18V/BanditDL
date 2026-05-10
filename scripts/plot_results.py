@@ -112,6 +112,8 @@ def main() -> None:
             "eval_worst",
             "reward_algorithm",
             "reward_oracle",
+            "reward_selected_min",
+            "reward_selected_max",
             "regret",
             "normalized_regret",
             "neighbor_disagreement",

@@ -14,6 +14,8 @@ class MetricKey(StrEnum):
     TRAIN_LOSSES = "train_losses"
     REWARD_ALGORITHM = "reward_algorithm"
     REWARD_ORACLE = "reward_oracle"
+    REWARD_SELECTED_MIN = "reward_selected_min"
+    REWARD_SELECTED_MAX = "reward_selected_max"
     REGRET = "regret"
     NORMALIZED_REGRET = "normalized_regret"
     NEIGHBOR_DISAGREEMENT = "neighbor_disagreement"
