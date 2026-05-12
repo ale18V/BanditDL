@@ -173,6 +173,7 @@ def _make_args(
     args.setdefault("validation-ratio", 0.5)
     args.setdefault("eval-split-seed", 0)
     args.setdefault("evaluate-test", False)
+    args.setdefault("record-consensus-metrics", True)
     args["result-directory"] = str(result_dir)
     args["seed"] = seed
     args["device"] = device
@@ -356,7 +357,7 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
     selected_reward_min_history = []
     selected_reward_max_history = []
 
-    for current_step in range(args.rounds + 1):
+    for current_step in range(args.rounds):
         mean_validation_accuracy = None
         mean_validation_loss = None
         mean_train_loss = None
@@ -450,16 +451,12 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
             del candidate_weights, candidate_values, neighbor_weights
             if "weight" in locals(): del weight
 
-        # Release honest weights before evaluation/next round to save memory
+        # Release honest weights before next round to save memory
         del honest_weights
 
-        # Skip updated_weights and expensive metrics on non-evaluation rounds
-        is_eval_round = args.evaluation_delta > 0 and current_step % args.evaluation_delta == 0
-        is_last_round = current_step == args.rounds
-        
-        if is_eval_round or is_last_round:
+        if args.record_consensus_metrics:
             with torch.no_grad():
-                # Pull to CPU
+                # Use CPU weights for these expensive calculations to stay within GPU memory
                 updated_weights = [w.pull(None).cpu() for w in workers]
                 _raise_if_nonfinite_weights(workers, current_step, "dynamic")
                 neighbor_matrix = selected_round.copy()
@@ -468,18 +465,15 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
                     updated_weights, neighbor_indices=neighbor_matrix
                 )
                 consensus = consensus_drift(updated_weights)
-                # Release updated weights immediately after computing metrics
+                # Release updated weights immediately
                 del updated_weights
             neighbor_disagreement_history.append(disagreement.cpu().numpy())
             consensus_drift_history.append(consensus.cpu().numpy())
         else:
-            # Re-use previous values if available to keep history length consistent
-            if neighbor_disagreement_history:
-                neighbor_disagreement_history.append(neighbor_disagreement_history[-1])
-                consensus_drift_history.append(consensus_drift_history[-1])
-            else:
-                neighbor_disagreement_history.append(np.zeros(args.nb_honests))
-                consensus_drift_history.append(np.zeros(args.nb_honests))
+            # Append dummy or empty values to keep history consistent if needed, 
+            # though plotting might need care. For now, let's keep it dense as requested.
+            pass
+
         sampler_kl_history.append(sampler_kl_round)
         sampler_min_probability_history.append(sampler_min_probability_round)
         sampler_max_probability_history.append(sampler_max_probability_round)
@@ -709,7 +703,7 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
     train_losses = []
     neighbor_disagreement_history = []
     consensus_drift_history = []
-    for current_step in range(args.rounds + 1):
+    for current_step in range(args.rounds):
         mean_validation_accuracy = None
         mean_validation_loss = None
         mean_train_loss = None
@@ -780,34 +774,24 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
             # Aggressively clear temporary tensor references
             del honest_neighbor_weights, byz_weights
 
-        # Release honest weights before evaluation/next round to save memory
+        # Release honest weights before next round to save memory
         del honest_weights
 
-        # Skip updated_weights and expensive metrics on non-evaluation rounds
-        is_eval_round = args.evaluation_delta > 0 and current_step % args.evaluation_delta == 0
-        is_last_round = current_step == args.rounds
-        
-        if is_eval_round or is_last_round:
+        if args.record_consensus_metrics:
             with torch.no_grad():
-                # Pull to CPU
+                # Use CPU weights for these expensive calculations
                 updated_weights = [w.pull(None).cpu() for w in workers]
                 _raise_if_nonfinite_weights(workers, current_step, "fixed")
                 disagreement = neighbor_disagreement(
                     updated_weights, adjacency=adjacency_honest
                 )
                 consensus = consensus_drift(updated_weights)
-                # Release updated weights immediately after computing metrics
+                # Release updated weights immediately
                 del updated_weights
             neighbor_disagreement_history.append(disagreement.cpu().numpy())
             consensus_drift_history.append(consensus.cpu().numpy())
         else:
-            # Re-use previous values if available to keep history length consistent
-            if neighbor_disagreement_history:
-                neighbor_disagreement_history.append(neighbor_disagreement_history[-1])
-                consensus_drift_history.append(consensus_drift_history[-1])
-            else:
-                neighbor_disagreement_history.append(np.zeros(args.nb_honests))
-                consensus_drift_history.append(np.zeros(args.nb_honests))
+            pass
 
     final_accuracy, final_validation_loss, final_train_loss = (
         _record_final_evaluation_if_needed(
@@ -820,6 +804,9 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
             validation_accuracies,
             validation_losses,
             train_losses,
+            neighbor_disagreement_history,
+            consensus_drift_history,
+            adjacency=adjacency_honest,
         )
     )
     if _should_log_step(args.rounds, args.rounds):
