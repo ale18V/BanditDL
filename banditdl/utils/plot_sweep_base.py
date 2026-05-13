@@ -215,7 +215,7 @@ def enumerate_valid_param_dicts(base_cfg, search_space):
         when_clause = _when_clause(raw_spec)
         trial_cfg = OmegaConf.create(OmegaConf.to_container(base_cfg, resolve=True))
         for key, value in acc_params.items():
-            OmegaConf.update(trial_cfg, key, value, merge=False)
+            OmegaConf.update(trial_cfg, key, value, merge=False, force_add=True)
         if when_clause is not None and not _conditions_met(trial_cfg, when_clause):
             walk(acc_params, idx + 1)
             return
@@ -417,7 +417,7 @@ class SweepTable:
         for row in self.rows:
             trial_cfg = OmegaConf.create({})
             for key, value in row.params.items():
-                OmegaConf.update(trial_cfg, key, value, merge=False)
+                OmegaConf.update(trial_cfg, key, value, merge=False, force_add=True)
             ok = True
             for path in paths_set:
                 spec = self._spec_for_path(path)

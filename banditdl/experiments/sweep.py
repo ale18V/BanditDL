@@ -61,7 +61,7 @@ def _apply_trial_params(cfg, trial_params: dict) -> None:
                 merge=False,
             )
         else:
-            OmegaConf.update(cfg, path, value, merge=False)
+            OmegaConf.update(cfg, path, value, merge=False, force_add=True)
 
 
 def _objective(trial, base_cfg, trials_root: Path, axis_lookup: dict, combos: list) -> float:
@@ -105,7 +105,7 @@ def _run_trial_job(
 ) -> dict:
     trial_cfg = OmegaConf.create(base_cfg_container)
     _apply_trial_params(trial_cfg, trial_params)
-    OmegaConf.update(trial_cfg, "device", device, merge=False)
+    OmegaConf.update(trial_cfg, "device", device, merge=False, force_add=True)
 
     folder_name = trial_folder_name(trial_params, axis_lookup)
     trial_result_dir = Path(trials_root) / folder_name / "results"
@@ -222,7 +222,13 @@ def _run_best_trial_test_evaluation(best_trial, base_cfg, output_root: Path) -> 
     best_cfg = OmegaConf.create(OmegaConf.to_container(base_cfg, resolve=False))
     _apply_trial_params(best_cfg, best_params)
     if "device" in best_trial.user_attrs:
-        OmegaConf.update(best_cfg, "device", best_trial.user_attrs["device"], merge=False)
+        OmegaConf.update(
+            best_cfg,
+            "device",
+            best_trial.user_attrs["device"],
+            merge=False,
+            force_add=True,
+        )
 
     best_result_dir = output_root / "best_trial_test_eval" / "results"
     best_result_dir.mkdir(parents=True, exist_ok=True)
