@@ -2,7 +2,6 @@
 
 import torch
 import random
-import math
 from banditdl.utils.math_utils import (
     clip_vector,
     smoothed_weiszfeld,
@@ -282,6 +281,8 @@ class RobustAggregator(object):
         self.prev_momentum = torch.zeros(model_size, device=device)
 
     def aggregate(self, vectors):
+        if vectors and self.prev_momentum.device != vectors[0].device:
+            self.prev_momentum = self.prev_momentum.to(vectors[0].device)
         if self.server_clip:
             aggregate_vector = robust_aggregators["server_clip"](self, vectors)
         else:

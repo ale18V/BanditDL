@@ -1,8 +1,6 @@
 """Byzantine attack implementations for robust distributed learning."""
 
 import torch
-import copy
-
 # Import utility functions from the core math helpers
 from banditdl.utils.math_utils import clip_vector, line_maximize
 
@@ -64,20 +62,27 @@ def auto_ALIE(honest_vectors, aggregator, nb_byz, gradient_clip, **kwargs):
 
 
 def mimic(attack, honest_vectors, current_step, **kwargs):
+    mu_mimic, z_mimic = attack.mimic_state(honest_vectors)
     if attack.learning_phase_mimic is None:
         #JS: Always return the vector of the first worker
         return honest_vectors[0]
 
     if current_step < attack.learning_phase_mimic:
         #JS: Update mu_mimic and z_mimic only if still in learning phase
-        attack.update_mimic_heuristic(honest_vectors, current_step)
+        mu_mimic, z_mimic = attack.update_mimic_heuristic(
+            honest_vectors,
+            current_step,
+            mu_mimic=mu_mimic,
+            z_mimic=z_mimic,
+        )
+        attack.store_mimic_state(mu_mimic, z_mimic)
         #JS: Return the vector of the first worker in learning phase
         return honest_vectors[0]
 
     current_max = -1
     best_worker_to_mimic = None
     for i, vector in enumerate(honest_vectors):
-        dot_product = torch.dot(vector, attack.z_mimic).norm().item()
+        dot_product = torch.dot(vector, z_mimic).norm().item()
         if dot_product > current_max:
             current_max = dot_product
             best_worker_to_mimic = i
@@ -87,7 +92,9 @@ def mimic(attack, honest_vectors, current_step, **kwargs):
 
 #JS: infinity attack
 def inf(attack, **kwargs):
-    return torch.ones(attack.model_size, device=attack.device) * float('inf')
+    honest_vectors = kwargs.get("honest_vectors", [])
+    device = honest_vectors[0].device if honest_vectors else attack.device
+    return torch.ones(attack.model_size, device=device) * float('inf')
 
 #JS: Dictionary mapping every Byzantine attack to its corresponding function
 byzantine_attacks = {"SF": signflipping, "LF": labelflipping, "FOE": fall_of_empires, "ALIE": a_little_is_enough, "mimic": mimic,
@@ -124,19 +131,40 @@ class ByzantineAttack(object):
 
 
     #JS: update the parameters of the mimic attack
-    def update_mimic_heuristic(self, honest_vectors, current_step):
+    def mimic_state(self, honest_vectors):
+        if not honest_vectors:
+            return self.mu_mimic, self.z_mimic
+        device = honest_vectors[0].device
+        if self.mu_mimic.device == device:
+            return self.mu_mimic, self.z_mimic
+        return self.mu_mimic.to(device), self.z_mimic.to(device)
+
+    def store_mimic_state(self, mu_mimic, z_mimic):
+        self.mu_mimic = mu_mimic.to(self.device)
+        self.z_mimic = z_mimic.to(self.device)
+
+    def update_mimic_heuristic(
+        self,
+        honest_vectors,
+        current_step,
+        mu_mimic=None,
+        z_mimic=None,
+    ):
+        if mu_mimic is None or z_mimic is None:
+            mu_mimic, z_mimic = self.mimic_state(honest_vectors)
         time_factor = 1 / (current_step + 2)
         step_ratio = (current_step + 1) * time_factor
-        self.mu_mimic.mul_(step_ratio)
-        self.mu_mimic.add_(torch.stack(honest_vectors).mean(dim=0), alpha=time_factor)
+        mu_mimic.mul_(step_ratio)
+        mu_mimic.add_(torch.stack(honest_vectors).mean(dim=0), alpha=time_factor)
 
-        self.z_mimic.mul_(step_ratio)
-        cumulative = torch.zeros(self.model_size, device=self.device)
+        z_mimic.mul_(step_ratio)
+        cumulative = torch.zeros(self.model_size, device=mu_mimic.device)
         for vector in honest_vectors:
-            deviation = torch.sub(vector, self.mu_mimic)
-            deviation.mul_(torch.dot(deviation, self.z_mimic).norm().item())
+            deviation = torch.sub(vector, mu_mimic)
+            deviation.mul_(torch.dot(deviation, z_mimic).norm().item())
             cumulative.add_(deviation)
 
-        self.z_mimic.mul_(step_ratio)
-        self.z_mimic.add_(torch.nn.functional.normalize(cumulative, dim=0), alpha=time_factor)
-        self.z_mimic.div_(self.z_mimic.norm().item())
+        z_mimic.mul_(step_ratio)
+        z_mimic.add_(torch.nn.functional.normalize(cumulative, dim=0), alpha=time_factor)
+        z_mimic.div_(z_mimic.norm().item())
+        return mu_mimic, z_mimic
