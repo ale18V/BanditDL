@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing as mp
 from pathlib import Path
 
 import hydra
@@ -77,17 +79,144 @@ def _objective(trial, base_cfg, trials_root: Path, axis_lookup: dict, combos: li
     return validation_metric
 
 
+def _run_trial_job(
+    trial_index: int,
+    trial_params: dict,
+    base_cfg_container: dict,
+    trials_root: str,
+    axis_lookup: dict,
+    device: str,
+) -> dict:
+    trial_cfg = OmegaConf.create(base_cfg_container)
+    for path, value in trial_params.items():
+        OmegaConf.update(trial_cfg, path, value, merge=False)
+    OmegaConf.update(trial_cfg, "device", device, merge=False)
+
+    folder_name = trial_folder_name(trial_params, axis_lookup)
+    trial_result_dir = Path(trials_root) / folder_name / "results"
+    trial_result_dir.mkdir(parents=True, exist_ok=True)
+    run_cfg = build_engine_config(trial_cfg)
+    seed_value = int(trial_cfg.seed) + trial_index
+
+    if run_cfg.run_mode == "dynamic":
+        run_dynamic(
+            params=run_cfg.params,
+            result_dir=trial_result_dir,
+            seed=seed_value,
+            device=device,
+        )
+    else:
+        run_fixed(
+            params=run_cfg.params,
+            result_dir=trial_result_dir,
+            seed=seed_value,
+            device=device,
+        )
+
+    validation_metric = _read_metric_file_max(trial_result_dir / "validation")
+    return {
+        "value": validation_metric,
+        "result_dir": str(trial_result_dir),
+        "seed": seed_value,
+        "resolved_params": trial_params,
+        "device": device,
+        "trial_index": trial_index,
+    }
+
+
+def _optuna_devices(optuna_cfg, cfg) -> list[str]:
+    raw = optuna_cfg.get("devices")
+    if raw is None:
+        return [resolve_device(cfg)]
+    devices = OmegaConf.to_container(raw, resolve=True)
+    if isinstance(devices, str):
+        devices = [devices]
+    devices = [str(device) for device in devices if str(device)]
+    if not devices:
+        raise ValueError("optuna.devices must contain at least one device")
+    return devices
+
+
+def _add_completed_trial(study, result: dict) -> None:
+    trial = optuna.trial.create_trial(
+        value=float(result["value"]),
+        state=optuna.trial.TrialState.COMPLETE,
+        user_attrs={
+            "validation_accuracy": float(result["value"]),
+            "result_dir": result["result_dir"],
+            "seed": int(result["seed"]),
+            "resolved_params": dict(result["resolved_params"]),
+            "device": result["device"],
+            "trial_index": int(result["trial_index"]),
+        },
+    )
+    study.add_trial(trial)
+
+
+def _run_trials_parallel(
+    study,
+    cfg,
+    trials_root: Path,
+    axis_lookup: dict,
+    combos: list,
+    devices: list[str],
+) -> None:
+    base_cfg_container = OmegaConf.to_container(cfg, resolve=False)
+    combo_iter = iter(enumerate(combos))
+    futures = {}
+    context = mp.get_context("spawn")
+
+    def submit_next(executor, device):
+        try:
+            trial_index, trial_params = next(combo_iter)
+        except StopIteration:
+            return
+        print(
+            f"[optuna] dispatch trial={trial_index} device={device} params={trial_params}",
+            flush=True,
+        )
+        future = executor.submit(
+            _run_trial_job,
+            trial_index,
+            dict(trial_params),
+            base_cfg_container,
+            str(trials_root),
+            axis_lookup,
+            device,
+        )
+        futures[future] = device
+
+    with ProcessPoolExecutor(max_workers=len(devices), mp_context=context) as executor:
+        for device in devices:
+            submit_next(executor, device)
+        while futures:
+            future = next(as_completed(futures))
+            device = futures.pop(future)
+            result = future.result()
+            _add_completed_trial(study, result)
+            print(
+                f"[optuna] complete trial={result['trial_index']} "
+                f"device={result['device']} validation_accuracy={result['value']:.6f}",
+                flush=True,
+            )
+            submit_next(executor, device)
+
+
 def _run_best_trial_test_evaluation(best_trial, base_cfg, output_root: Path) -> float:
     best_params = _resolved_trial_params(best_trial)
     best_cfg = OmegaConf.create(OmegaConf.to_container(base_cfg, resolve=False))
     for param_path, sampled_value in best_params.items():
         OmegaConf.update(best_cfg, param_path, sampled_value, merge=False)
+    if "device" in best_trial.user_attrs:
+        OmegaConf.update(best_cfg, "device", best_trial.user_attrs["device"], merge=False)
 
     best_result_dir = output_root / "best_trial_test_eval" / "results"
     best_result_dir.mkdir(parents=True, exist_ok=True)
     run_cfg = build_engine_config(best_cfg)
     run_cfg.params["evaluate-test"] = True
-    seed_value = int(best_cfg.seed) + int(best_trial.number)
+    seed_value = int(
+        best_trial.user_attrs.get("seed", int(best_cfg.seed) + int(best_trial.number))
+    )
     device = resolve_device(best_cfg)
 
     if run_cfg.run_mode == "dynamic":
@@ -133,8 +262,18 @@ def main(cfg) -> None:
     direction = str(optuna_cfg.direction)
     study = optuna.create_study(direction=direction)
     total_trials = len(combos)
-    print(f"[optuna] grid trials={total_trials} | metric=validation_accuracy | trials_dir={trials_root}")
-    study.optimize(lambda trial: _objective(trial, cfg, trials_root, axis_lookup, combos), n_trials=total_trials)
+    devices = _optuna_devices(optuna_cfg, cfg)
+    print(
+        f"[optuna] grid trials={total_trials} | metric=validation_accuracy | "
+        f"trials_dir={trials_root} | devices={devices}"
+    )
+    if len(devices) == 1:
+        study.optimize(
+            lambda trial: _objective(trial, cfg, trials_root, axis_lookup, combos),
+            n_trials=total_trials,
+        )
+    else:
+        _run_trials_parallel(study, cfg, trials_root, axis_lookup, combos, devices)
 
     best = study.best_trial
     best_dir = best.user_attrs.get("result_dir")

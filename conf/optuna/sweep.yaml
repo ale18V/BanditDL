@@ -1,5 +1,6 @@
 n_trials: 20
 direction: maximize
+devices: null
 output_dir: .optuna_runs
 search_space:
   heterogeneity.alpha:
