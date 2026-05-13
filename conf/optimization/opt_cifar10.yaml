@@ -5,5 +5,5 @@ learning_rate_decay: 100
 learning_rate_decay_delta: 500
 weight_decay: 1e-2
 rounds: 2000
-momentum_worker: 0.99
-nb_local_steps: 1
+momentum_worker: 0.9
+nb_local_steps: 3

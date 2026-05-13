@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import copy
 import os
 import pathlib
@@ -57,7 +55,14 @@ def _log_start(mode: str, args, result_dir: pathlib.Path) -> None:
     print(f"[banditdl] results: {result_dir}", flush=True)
 
 
-def _log_progress(mode: str, current_step: int, args, accuracy=None, validation_loss=None, train_loss=None) -> None:
+def _log_progress(
+    mode: str,
+    current_step: int,
+    args,
+    accuracy=None,
+    validation_loss=None,
+    train_loss=None,
+) -> None:
     message = f"[banditdl] {mode} round {current_step}/{args.rounds}"
     if accuracy is not None:
         message += f" | mean_accuracy={accuracy:.4f}"
@@ -139,6 +144,31 @@ def _record_final_evaluation_if_needed(
     )
 
 
+def _honest_snapshot_bytes(worker) -> int:
+    return sum(
+        param.numel() * param.element_size() for param in worker.model.parameters()
+    )
+
+
+def gpu_fits_pulled_weights(workers) -> bool:
+    """
+    Heuristic to check if the GPU can hold pulled weights from all honest workers without running out of memory.
+    """
+    if not workers or not torch.cuda.is_available():
+        return False
+    if any(getattr(worker, "device", None) != "cuda" for worker in workers):
+        return False
+    free_bytes, _ = torch.cuda.mem_get_info()
+    required_bytes = len(workers) * _honest_snapshot_bytes(workers[0])
+    return required_bytes < free_bytes * 0.5
+
+
+def _collect_honest_weights(workers):
+    if gpu_fits_pulled_weights(workers):
+        return [w.pull(None) for w in workers]
+    return [w.pull(None).cpu() for w in workers]
+
+
 def _make_args(
     params: dict, result_dir: pathlib.Path, seed: int, device: str
 ) -> SimpleNamespace:
@@ -173,6 +203,7 @@ def _make_args(
     args.setdefault("validation-ratio", 0.5)
     args.setdefault("eval-split-seed", 0)
     args.setdefault("evaluate-test", False)
+    args.setdefault("identical_initialization", True)
     args["result-directory"] = str(result_dir)
     args["seed"] = seed
     args["device"] = device
@@ -234,7 +265,7 @@ def _init_workers_dynamic(args, train_loader_dict, validation_loader):
             neighbor_sampler=neighbor_sampler,
             reward_strategy=reward_strategy,
         )
-        if worker_id > 0:
+        if worker_id > 0 and args.identical_initialization:
             w.model.load_state_dict(workers[0].model.state_dict())
         workers.append(w)
     return workers
@@ -282,7 +313,10 @@ def _sampler_probability_stats(worker) -> tuple[float, float, float]:
     )
     uniform_probability = 1.0 / len(population)
     kl_to_uniform = float(
-        np.sum(probabilities * np.log(np.maximum(probabilities, 1e-12) / uniform_probability))
+        np.sum(
+            probabilities
+            * np.log(np.maximum(probabilities, 1e-12) / uniform_probability)
+        )
     )
     return kl_to_uniform, float(probabilities.min()), float(probabilities.max())
 
@@ -292,18 +326,20 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
     _setup_seed(args.seed)
     _log_start("dynamic", args, result_dir)
 
-    train_loader_dict, validation_loader, test_loader = dataset.make_train_validation_test_datasets(
-        args.dataset,
-        heterogeneity=args.hetero,
-        numb_labels=args.numb_labels,
-        alpha_dirichlet=args.dirichlet_alpha,
-        distinct_datasets=args.distinct_data,
-        nb_datapoints=args.nb_datapoints,
-        honest_workers=args.nb_honests,
-        train_batch=args.batch_size,
-        test_batch=args.batch_size_test,
-        validation_ratio=args.validation_ratio,
-        split_seed=args.eval_split_seed,
+    train_loader_dict, validation_loader, test_loader = (
+        dataset.make_train_validation_test_datasets(
+            args.dataset,
+            heterogeneity=args.hetero,
+            numb_labels=args.numb_labels,
+            alpha_dirichlet=args.dirichlet_alpha,
+            distinct_datasets=args.distinct_data,
+            nb_datapoints=args.nb_datapoints,
+            honest_workers=args.nb_honests,
+            train_batch=args.batch_size,
+            test_batch=args.batch_size_test,
+            validation_ratio=args.validation_ratio,
+            split_seed=args.eval_split_seed,
+        )
     )
 
     result_dir.mkdir(parents=True, exist_ok=True)
@@ -356,6 +392,7 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
     selected_reward_min_history = []
     selected_reward_max_history = []
 
+    # We want to run the last step. If the user specifies 500 round it's because they want to see the 500th round results.
     for current_step in range(args.rounds + 1):
         mean_validation_accuracy = None
         mean_validation_loss = None
@@ -389,7 +426,8 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
 
         for w in workers:
             w.train()
-        honest_weights = [w.pull(None) for w in workers]
+
+        honest_weights = _collect_honest_weights(workers)
 
         selected_round = np.full(
             (args.nb_honests, workers[0].nb_neighbors), -1, dtype=int
@@ -421,11 +459,16 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
                         candidate_weights[neighbor_id] = weight
             candidate_ids = list(candidate_weights)
             candidate_values = [candidate_weights[i] for i in candidate_ids]
-            candidate_rewards = w.reward_strategy.score(w.pull(None), candidate_values)
+            local_weights = w.pull(None)
+            if candidate_values and candidate_values[0].device != local_weights.device:
+                local_weights = local_weights.to(candidate_values[0].device)
+            candidate_rewards = w.reward_strategy.score(local_weights, candidate_values)
             rewards_by_id = dict(zip(candidate_ids, candidate_rewards, strict=True))
             cumulative_arm_rewards[w.worker_id, candidate_ids] += candidate_rewards
 
-            neighbor_weights = [candidate_weights[i] for i in selected_neighbor_ids]
+            neighbor_weights = [
+                candidate_weights[i].to(w.device) for i in selected_neighbor_ids
+            ]
             byz_neighbor_ids = [
                 i for i in selected_neighbor_ids if i >= args.nb_honests
             ]
@@ -443,8 +486,15 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
             w.observe_neighbors(selected_neighbor_ids, neighbor_weights)
             w.aggregate(neighbor_weights)
 
+            # Aggressively clear temporary tensor references
+            del candidate_weights, candidate_values, neighbor_weights
+            if "weight" in locals():
+                del weight
+
+        del honest_weights
+
         with torch.no_grad():
-            updated_weights = [w.pull(None) for w in workers]
+            updated_weights = _collect_honest_weights(workers)
             _raise_if_nonfinite_weights(workers, current_step, "dynamic")
             neighbor_matrix = selected_round.copy()
             neighbor_matrix[neighbor_matrix >= args.nb_honests] = -1
@@ -452,8 +502,10 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
                 updated_weights, neighbor_indices=neighbor_matrix
             )
             consensus = consensus_drift(updated_weights)
+            del updated_weights
         neighbor_disagreement_history.append(disagreement.cpu().numpy())
         consensus_drift_history.append(consensus.cpu().numpy())
+
         sampler_kl_history.append(sampler_kl_round)
         sampler_min_probability_history.append(sampler_min_probability_round)
         sampler_max_probability_history.append(sampler_max_probability_round)
@@ -520,9 +572,14 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
     oracle_rewards = np.array(oracle_reward_history)
     regret = oracle_rewards - algorithm_rewards
 
-    np.save(os.path.join(result_dir, "validation_accuracies.npy"), np.array(validation_accuracies))
+    np.save(
+        os.path.join(result_dir, "validation_accuracies.npy"),
+        np.array(validation_accuracies),
+    )
     np.save(os.path.join(result_dir, "accuracies.npy"), np.array(validation_accuracies))
-    np.save(os.path.join(result_dir, "validation_losses.npy"), np.array(validation_losses))
+    np.save(
+        os.path.join(result_dir, "validation_losses.npy"), np.array(validation_losses)
+    )
     np.save(os.path.join(result_dir, "train_losses.npy"), np.array(train_losses))
     np.save(os.path.join(result_dir, "reward_algorithm.npy"), algorithm_rewards)
     np.save(os.path.join(result_dir, "reward_oracle.npy"), oracle_rewards)
@@ -565,24 +622,34 @@ def run_dynamic(params: dict, result_dir: pathlib.Path, seed: int, device: str) 
     )
     _log_done("dynamic")
 
+    # Final memory cleanup
+    import gc
+
+    del workers
+    gc.collect()
+    if args.device != "cpu":
+        torch.cuda.empty_cache()
+
 
 def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) -> None:
     args = _make_args(params, result_dir, seed, device)
     _setup_seed(args.seed)
     _log_start("fixed", args, result_dir)
 
-    train_loader_dict, validation_loader, test_loader = dataset.make_train_validation_test_datasets(
-        args.dataset,
-        heterogeneity=args.hetero,
-        numb_labels=args.numb_labels,
-        alpha_dirichlet=args.dirichlet_alpha,
-        distinct_datasets=args.distinct_data,
-        nb_datapoints=args.nb_datapoints,
-        honest_workers=args.nb_honests,
-        train_batch=args.batch_size,
-        test_batch=args.batch_size_test,
-        validation_ratio=args.validation_ratio,
-        split_seed=args.eval_split_seed,
+    train_loader_dict, validation_loader, test_loader = (
+        dataset.make_train_validation_test_datasets(
+            args.dataset,
+            heterogeneity=args.hetero,
+            numb_labels=args.numb_labels,
+            alpha_dirichlet=args.dirichlet_alpha,
+            distinct_datasets=args.distinct_data,
+            nb_datapoints=args.nb_datapoints,
+            honest_workers=args.nb_honests,
+            train_batch=args.batch_size,
+            test_batch=args.batch_size_test,
+            validation_ratio=args.validation_ratio,
+            split_seed=args.eval_split_seed,
+        )
     )
 
     nb_edges = args.nb_workers * args.nb_neighbors // 2
@@ -594,9 +661,7 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
     )
     dissensus = args.attack == "dissensus"
     adjacency_honest = torch.as_tensor(
-        np.asarray(
-            comm_graph.adjacency_matrix[: args.nb_honests, : args.nb_honests]
-        ),
+        np.asarray(comm_graph.adjacency_matrix[: args.nb_honests, : args.nb_honests]),
         dtype=torch.float32,
         device=args.device,
     )
@@ -634,7 +699,7 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
             comm_graph,
             dissensus,
         )
-        if worker_id > 0:
+        if worker_id > 0 and args.identical_initialization:
             w.model.load_state_dict(workers[0].model.state_dict())
         workers.append(w)
 
@@ -676,6 +741,8 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
     train_losses = []
     neighbor_disagreement_history = []
     consensus_drift_history = []
+
+    # We want to run the last step. If the user specifies 500 round it's because they want to see the 500th round results.
     for current_step in range(args.rounds + 1):
         mean_validation_accuracy = None
         mean_validation_loss = None
@@ -709,22 +776,24 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
 
         for w in workers:
             w.train()
-        honest_weights = [w.pull(None) for w in workers]
+        honest_weights = _collect_honest_weights(workers)
 
         for w in workers:
             neighbors = list(w.comm_graph.neighbors(w.worker_id)) + [w.worker_id]
             honest_neighbors = [i for i in neighbors if i < args.nb_honests]
             byz_neighbors = [i for i in neighbors if i >= args.nb_honests]
             w.num_selected_byz.append(len(byz_neighbors))
-            honest_neighbor_weights = [honest_weights[i] for i in honest_neighbors]
+            honest_neighbor_weights = [
+                honest_weights[i].to(w.device) for i in honest_neighbors
+            ]
             if dissensus:
                 byz_weights = [
                     dec_byz_workers[i].pull(
                         {
                             "target": w.worker_id,
                             "honest_neighbors": honest_neighbors,
-                            "pivot_params": w.pull(None),
-                            "honest_local_params": honest_neighbor_weights,
+                            "pivot_params": w.pull(None),  # Already on device
+                            "honest_local_params": honest_neighbor_weights,  # Already on device
                         }
                     )
                     for i in byz_neighbors
@@ -732,9 +801,9 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
             else:
                 byz_weights = (
                     [
-                        byz_workers[byz_neighbor].pull(
-                            {"honest_weights": honest_weights, "step": current_step}
-                        )
+                        byz_workers[byz_neighbor]
+                        .pull({"honest_weights": honest_weights, "step": current_step})
+                        .to(w.device)
                         for byz_neighbor in byz_neighbors
                     ]
                     if byz_neighbors
@@ -742,13 +811,19 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
                 )
             w.aggregate(honest_neighbor_weights + byz_weights)
 
+            # Aggressively clear temporary tensor references
+            del honest_neighbor_weights, byz_weights
+
+        del honest_weights
+
         with torch.no_grad():
-            updated_weights = [w.pull(None) for w in workers]
+            updated_weights = _collect_honest_weights(workers)
             _raise_if_nonfinite_weights(workers, current_step, "fixed")
             disagreement = neighbor_disagreement(
                 updated_weights, adjacency=adjacency_honest
             )
             consensus = consensus_drift(updated_weights)
+            del updated_weights
         neighbor_disagreement_history.append(disagreement.cpu().numpy())
         consensus_drift_history.append(consensus.cpu().numpy())
 
@@ -792,9 +867,14 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
     fd_validation_loss.close()
     fd_train_loss.close()
 
-    np.save(os.path.join(result_dir, "validation_accuracies.npy"), np.array(validation_accuracies))
+    np.save(
+        os.path.join(result_dir, "validation_accuracies.npy"),
+        np.array(validation_accuracies),
+    )
     np.save(os.path.join(result_dir, "accuracies.npy"), np.array(validation_accuracies))
-    np.save(os.path.join(result_dir, "validation_losses.npy"), np.array(validation_losses))
+    np.save(
+        os.path.join(result_dir, "validation_losses.npy"), np.array(validation_losses)
+    )
     np.save(os.path.join(result_dir, "train_losses.npy"), np.array(train_losses))
     np.save(
         os.path.join(result_dir, "neighbor_disagreement.npy"),
@@ -805,3 +885,11 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
         np.array(consensus_drift_history),
     )
     _log_done("fixed")
+
+    # Final memory cleanup
+    import gc
+
+    del workers
+    gc.collect()
+    if args.device != "cpu":
+        torch.cuda.empty_cache()

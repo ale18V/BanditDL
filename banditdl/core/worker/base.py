@@ -87,7 +87,11 @@ class HonestWorker(BaseWorker):
         self.model_size = len(flatten(self.model.parameters()))
 
         if self.device == "cuda":
-            self.model = torch.nn.DataParallel(self.model, device_ids=[0, 1])
+            device_ids = list(range(torch.cuda.device_count()))
+            if len(device_ids) > 1:
+                self.model = torch.nn.DataParallel(self.model, device_ids=device_ids)
+            else:
+                self.model = self.model.to("cuda")
 
         self.optimizer = torch.optim.SGD(
             self.model.parameters(), lr=self.initial_learning_rate, weight_decay=weight_decay

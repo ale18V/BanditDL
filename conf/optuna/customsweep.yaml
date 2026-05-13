@@ -1,4 +1,5 @@
 direction: maximize
+devices: null
 search_space:
   heterogeneity.alpha:
     name: alpha
@@ -7,7 +8,7 @@ search_space:
   topology.sampling:
     type: categorical
     choices: [0.01, 0.1, 0.5, 0.9]
-  sampler.name:
+  sampler:
     name: sampler
     type: categorical
     choices: [uniform, epsilon_greedy, exp3]
@@ -16,10 +17,10 @@ search_space:
     type: categorical
     choices: [0.01, 0.1, 0.5, 0.9]
     when:
-      sampler.name: epsilon_greedy
+      sampler: epsilon_greedy
   sampler.params.gamma:
     name: gamma
     type: categorical
     choices: [auto, 0.01, 0.05, 0.1]
     when:
-      sampler.name: exp3
+      sampler: exp3

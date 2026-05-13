@@ -1,0 +1,11 @@
+direction: maximize
+devices: [cuda, cpu]
+search_space:
+  sampler:
+    name: sampler
+    type: categorical
+    choices: [uniform, exp3, epsilon_greedy]
+  heterogeneity.alpha:
+    name: alpha
+    type: categorical
+    choices: [0.2, 0.5, 1.0]

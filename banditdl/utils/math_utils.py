@@ -193,8 +193,16 @@ def average_nearest_neighbors(vectors, f, pivot=None):
     vector_scores.sort(key=lambda x: x[1])
     
     #JS: Return the average of the n-f closest vectors to pivot
-    closest_vectors = [vectors[vector_scores[j][0]] for j in range(len(vectors) -f)]
-    return torch.stack(closest_vectors).mean(dim=0)
+    closest_indices = [vector_scores[j][0] for j in range(len(vectors) - f)]
+    if not closest_indices:
+        return torch.zeros_like(pivot)
+    
+    # Use in-place addition to avoid torch.stack memory spike
+    res = vectors[closest_indices[0]].clone()
+    for idx in closest_indices[1:]:
+        res.add_(vectors[idx])
+    res.div_(len(closest_indices))
+    return res
 
 
 def compute_min_diameter_subset(vectors, nb_workers, nb_byz):

@@ -148,12 +148,26 @@ class MetricLoader:
             return self._load_text(key)
 
         values = self.load_values(key)
-        x = np.arange(values.shape[0])
-        if interpolate_eval and key == MetricKey.VALIDATION_ACCURACIES:
-            source_steps = self._load_text(MetricKey.VALIDATION).x
-            x = self.full_round_axis()
-            values = interpolate_to_steps(values, source_steps, x)
-        return MetricData(x=x, values=values)
+        full_x = self.full_round_axis()
+
+        # Case 1: Length matches total rounds (per-round metric)
+        if values.shape[0] == full_x.shape[0]:
+            return MetricData(x=full_x, values=values)
+
+        # Case 2: Length matches evaluation steps
+        try:
+            validation_data = self._load_text(MetricKey.VALIDATION)
+            if values.shape[0] == validation_data.x.shape[0]:
+                x = validation_data.x
+                if interpolate_eval:
+                    values = interpolate_to_steps(values, x, full_x)
+                    x = full_x
+                return MetricData(x=x, values=values)
+        except (FileNotFoundError, ValueError):
+            pass
+
+        # Fallback: Simple range
+        return MetricData(x=np.arange(values.shape[0]), values=values)
 
     def load_values(self, metric: MetricKey | str) -> np.ndarray:
         key = resolve_metric(metric)

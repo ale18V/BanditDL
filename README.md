@@ -67,10 +67,32 @@ Defaults (`conf/sweep.yaml`) compose `conf/config.yaml` plus `conf/optuna/sanity
 
 Behavior:
 - Enumerates every valid Cartesian combination of **categorical** `optuna.search_space` entries (respecting optional `when:` guards).
-- Queues each combo via Optuna `enqueue_trial`, runs one training job per trial.
+- Runs one training job per trial.
 - Writes trial artifacts under `<hydra_run>/trials/<param_tokens>/results/` (numpy arrays mirror standard runs).
 - Tracks validation accuracy from `results/validation`, selects the best trial, then re-runs it once with test evaluation under `<hydra_run>/best_trial_test_eval/results`.
 - After all trials finish, renders default sweep plots under `<hydra_run>/sweep_artifacts/`.
+
+Run trials in parallel by declaring device slots:
+
+```bash
+uv run python -m banditdl.experiments.sweep optuna.devices='[cuda,cpu]'
+```
+
+Each entry in `optuna.devices` is one worker slot. With `[cuda,cpu]`, the runner keeps at most one active trial on the GPU and one active trial on the CPU, then assigns the next unfinished trial to whichever slot finishes first. Use repeated entries if you intentionally want more slots on the same device, for example `optuna.devices='[cpu,cpu]'`.
+
+The sweep runner can also sweep Hydra config groups. For example, the bundled
+overnight config sweeps `sampler: [uniform, exp3, epsilon_greedy]`, so each
+trial loads the corresponding file from `conf/sampler/`:
+
+```bash
+uv run python -m banditdl.experiments.sweep \
+  optuna=overnight \
+  optimization=opt_cifar10 \
+  dataset=cifar10 \
+  topology.nodes=15 \
+  topology.sampling=0.2 \
+  optimization.rounds=1000
+```
 
 Sweep plotting is intentionally defined in Python, not YAML. The default sweep plot set lives in `banditdl/utils/plot_sweep_base.py` and currently generates:
 
