@@ -80,6 +80,20 @@ uv run python -m banditdl.experiments.sweep optuna.devices='[cuda,cpu]'
 
 Each entry in `optuna.devices` is one worker slot. With `[cuda,cpu]`, the runner keeps at most one active trial on the GPU and one active trial on the CPU, then assigns the next unfinished trial to whichever slot finishes first. Use repeated entries if you intentionally want more slots on the same device, for example `optuna.devices='[cpu,cpu]'`.
 
+The sweep runner can also sweep Hydra config groups. For example, the bundled
+overnight config sweeps `sampler: [uniform, exp3, epsilon_greedy]`, so each
+trial loads the corresponding file from `conf/sampler/`:
+
+```bash
+uv run python -m banditdl.experiments.sweep \
+  optuna=overnight \
+  optimization=opt_cifar10 \
+  dataset=cifar10 \
+  topology.nodes=15 \
+  topology.sampling=0.2 \
+  optimization.rounds=1000
+```
+
 Sweep plotting is intentionally defined in Python, not YAML. The default sweep plot set lives in `banditdl/utils/plot_sweep_base.py` and currently generates:
 
 | Mode | Meaning |

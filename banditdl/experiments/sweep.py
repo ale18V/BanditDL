@@ -21,6 +21,9 @@ from banditdl.utils.plot_sweep_base import (
 )
 
 
+CONF_ROOT = Path(__file__).resolve().parents[2] / "conf"
+
+
 def _read_metric_file_max(metric_file: Path) -> float:
     if not metric_file.exists():
         raise FileNotFoundError(f"Missing metric file: {metric_file}")
@@ -47,6 +50,20 @@ def _resolved_trial_params(trial) -> dict:
     return {}
 
 
+def _apply_trial_params(cfg, trial_params: dict) -> None:
+    for path, value in trial_params.items():
+        group_file = CONF_ROOT / path / f"{value}.yaml"
+        if group_file.exists():
+            OmegaConf.update(
+                cfg,
+                path,
+                OmegaConf.load(group_file),
+                merge=False,
+            )
+        else:
+            OmegaConf.update(cfg, path, value, merge=False)
+
+
 def _objective(trial, base_cfg, trials_root: Path, axis_lookup: dict, combos: list) -> float:
     trial_index = int(trial.number)
     if trial_index >= len(combos):
@@ -56,8 +73,7 @@ def _objective(trial, base_cfg, trials_root: Path, axis_lookup: dict, combos: li
     trial_params = dict(combos[trial_index])
 
     trial_cfg = OmegaConf.create(OmegaConf.to_container(base_cfg, resolve=False))
-    for path, value in trial_params.items():
-        OmegaConf.update(trial_cfg, path, value, merge=False)
+    _apply_trial_params(trial_cfg, trial_params)
 
     folder_name = trial_folder_name(trial_params, axis_lookup)
     trial_result_dir = trials_root / folder_name / "results"
@@ -88,8 +104,7 @@ def _run_trial_job(
     device: str,
 ) -> dict:
     trial_cfg = OmegaConf.create(base_cfg_container)
-    for path, value in trial_params.items():
-        OmegaConf.update(trial_cfg, path, value, merge=False)
+    _apply_trial_params(trial_cfg, trial_params)
     OmegaConf.update(trial_cfg, "device", device, merge=False)
 
     folder_name = trial_folder_name(trial_params, axis_lookup)
@@ -205,8 +220,7 @@ def _run_trials_parallel(
 def _run_best_trial_test_evaluation(best_trial, base_cfg, output_root: Path) -> float:
     best_params = _resolved_trial_params(best_trial)
     best_cfg = OmegaConf.create(OmegaConf.to_container(base_cfg, resolve=False))
-    for param_path, sampled_value in best_params.items():
-        OmegaConf.update(best_cfg, param_path, sampled_value, merge=False)
+    _apply_trial_params(best_cfg, best_params)
     if "device" in best_trial.user_attrs:
         OmegaConf.update(best_cfg, "device", best_trial.user_attrs["device"], merge=False)
 
