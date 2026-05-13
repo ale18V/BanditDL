@@ -1,2 +1,3 @@
 evaluation_delta: 20
 record_consensus_metrics: true
+identical_initialization: false

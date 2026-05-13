@@ -174,6 +174,7 @@ def _make_args(
     args.setdefault("eval-split-seed", 0)
     args.setdefault("evaluate-test", False)
     args.setdefault("record-consensus-metrics", True)
+    args.setdefault("identical-initialization", True)
     args["result-directory"] = str(result_dir)
     args["seed"] = seed
     args["device"] = device
@@ -235,7 +236,7 @@ def _init_workers_dynamic(args, train_loader_dict, validation_loader):
             neighbor_sampler=neighbor_sampler,
             reward_strategy=reward_strategy,
         )
-        if worker_id > 0:
+        if worker_id > 0 and args.identical_initialization:
             w.model.load_state_dict(workers[0].model.state_dict())
         workers.append(w)
     return workers
@@ -661,7 +662,7 @@ def run_fixed(params: dict, result_dir: pathlib.Path, seed: int, device: str) ->
             comm_graph,
             dissensus,
         )
-        if worker_id > 0:
+        if worker_id > 0 and args.identical_initialization:
             w.model.load_state_dict(workers[0].model.state_dict())
         workers.append(w)
 
