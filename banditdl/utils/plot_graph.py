@@ -2,8 +2,8 @@
 
 Two edge-weight modes:
 
-- `sampler_probability`: uses `sampler_probabilities_final.npy` or
-  `sampler_probabilities_final_by_seed.npy`, the per-worker final-round sampler
+- `sampler_probability`: uses the final round of `sampler_probabilities.npy`
+  or legacy `sampler_probabilities_final.npy`, the per-worker sampler
   distribution. This is **directional**: entry `P[i, j]` is worker `i`'s
   converged bandit probability of sampling worker `j`. The graph is therefore
   drawn as a directed graph with two opposite edges between each pair — edge
@@ -77,14 +77,20 @@ def _load_weights(
     the matrix is a symmetric model-distance similarity (undirected).
     """
     if weight_source == "sampler_probability":
+        full_by_seed_path = run_dir / "sampler_probabilities_by_seed.npy"
+        full_path = run_dir / "sampler_probabilities.npy"
         by_seed_path = run_dir / "sampler_probabilities_final_by_seed.npy"
         path = run_dir / "sampler_probabilities_final.npy"
-        if by_seed_path.is_file():
+        if full_by_seed_path.is_file():
+            prob = np.nanmean(np.load(full_by_seed_path)[:, -1], axis=0)
+        elif full_path.is_file():
+            prob = np.load(full_path)[-1]
+        elif by_seed_path.is_file():
             prob = np.nanmean(np.load(by_seed_path), axis=0)
         elif path.is_file():
             prob = np.load(path)
         else:
-            raise FileNotFoundError(f"Missing {path}")
+            raise FileNotFoundError(f"Missing {full_path}")
         n = prob.shape[0]
         honest_block = prob[:, :n]  # restrict to honest-honest edges
         return np.asarray(honest_block, dtype=float), True

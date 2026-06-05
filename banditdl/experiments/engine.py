@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import os
 import pathlib
 import random
 from dataclasses import replace
@@ -122,16 +121,18 @@ def _record_final_evaluation_if_needed(
     validation_losses,
     train_losses,
 ):
-    if cfg.evaluation.evaluation_delta <= 0:
+    evaluation_delta = getattr(getattr(cfg, "evaluation", cfg), "evaluation_delta")
+    rounds = cfg.effective_rounds if hasattr(cfg, "effective_rounds") else cfg.rounds
+    if evaluation_delta <= 0:
         return None, None, None
-    if validation_steps and validation_steps[-1] == cfg.effective_rounds:
+    if validation_steps and validation_steps[-1] == rounds:
         return None, None, None
     return _record_evaluation(
         workers,
         fd_validation,
         fd_validation_loss,
         fd_train_loss,
-        cfg.effective_rounds,
+        rounds,
         validation_steps,
         validation_accuracies,
         validation_losses,
@@ -217,6 +218,14 @@ class ResultTracker:
         self.neighbor_disagreement_history.append(disagreement.cpu().numpy())
         self.consensus_drift_history.append(consensus.cpu().numpy())
 
+    def save_snapshot(self):
+        np.save(self.result_dir / "validation_accuracies.npy", np.array(self.validation_accuracies))
+        np.save(self.result_dir / "validation_losses.npy", np.array(self.validation_losses))
+        np.save(self.result_dir / "train_losses.npy", np.array(self.train_losses))
+        np.save(self.result_dir / "neighbor_disagreement.npy", np.array(self.neighbor_disagreement_history))
+        np.save(self.result_dir / "consensus_drift.npy", np.array(self.consensus_drift_history))
+        np.save(self.result_dir / "gradient_norms.npy", np.array(self.gradient_norm_history))
+
     def finalize(self, workers, mode):
         final_accuracy, final_val_loss, final_train_loss = _record_final_evaluation_if_needed(
             self.cfg,
@@ -251,17 +260,12 @@ class ResultTracker:
             store_result(fd_test, self.cfg.effective_rounds, sum(test_accuracies) / len(test_accuracies))
             fd_test.close()
 
-        np.save(os.path.join(self.result_dir, "validation_accuracies.npy"), np.array(self.validation_accuracies))
-        np.save(os.path.join(self.result_dir, "validation_losses.npy"), np.array(self.validation_losses))
-        np.save(os.path.join(self.result_dir, "train_losses.npy"), np.array(self.train_losses))
-        np.save(os.path.join(self.result_dir, "neighbor_disagreement.npy"), np.array(self.neighbor_disagreement_history))
-        np.save(os.path.join(self.result_dir, "consensus_drift.npy"), np.array(self.consensus_drift_history))
-        np.save(os.path.join(self.result_dir, "gradient_norms.npy"), np.array(self.gradient_norm_history))
+        self.save_snapshot()
 
         with torch.no_grad():
             final_weights = torch.stack([w.pull(None) for w in workers])
             pairwise_distance_final = torch.cdist(final_weights, final_weights).cpu().numpy()
-        np.save(os.path.join(self.result_dir, "pairwise_model_distance_final.npy"), pairwise_distance_final)
+        np.save(self.result_dir / "pairwise_model_distance_final.npy", pairwise_distance_final)
         _log_done(mode)
 
 
@@ -345,6 +349,29 @@ def _mean_selected_reward(rewards) -> float:
     return float(sum(rewards) / len(rewards))
 
 
+def _save_dynamic_metrics(
+    result_dir: pathlib.Path,
+    *,
+    algorithm_reward_history,
+    oracle_reward_history,
+    reward_min_history,
+    reward_max_history,
+    selected_neighbor_history,
+    oracle_neighbor_history,
+    sampler_probability_history,
+) -> None:
+    algorithm_rewards = np.array(algorithm_reward_history)
+    oracle_rewards = np.array(oracle_reward_history)
+    np.save(result_dir / "reward_algorithm.npy", algorithm_rewards)
+    np.save(result_dir / "reward_oracle.npy", oracle_rewards)
+    np.save(result_dir / "regret.npy", oracle_rewards - algorithm_rewards)
+    np.save(result_dir / "reward_selected_min.npy", np.array(reward_min_history))
+    np.save(result_dir / "reward_selected_max.npy", np.array(reward_max_history))
+    np.save(result_dir / "selected_neighbors.npy", np.array(selected_neighbor_history, dtype=int))
+    np.save(result_dir / "oracle_neighbors.npy", np.array(oracle_neighbor_history, dtype=int))
+    np.save(result_dir / "sampler_probabilities.npy", np.array(sampler_probability_history))
+
+
 def _dynamic_candidate_weights(w, honest_weights, byz_workers, current_step):
     candidate_weights = {
         worker_id: weight
@@ -369,24 +396,6 @@ def _full_sampler_probability_vector(worker, nb_total: int) -> np.ndarray:
     for arm in population:
         row[arm] = float(probabilities_by_arm[arm])
     return row
-
-
-def _sampler_probability_stats(worker) -> tuple[float, float, float]:
-    population = list(range(worker.nb_honest + worker.nb_byz))
-    population.remove(worker.worker_id)
-    probabilities_by_arm = worker.neighbor_sampler.probabilities(
-        population,
-        worker.nb_neighbors,
-    )
-    probabilities = np.array(
-        [probabilities_by_arm[arm] for arm in population],
-        dtype=float,
-    )
-    uniform_probability = 1.0 / len(population)
-    kl_to_uniform = float(
-        np.sum(probabilities * np.log(np.maximum(probabilities, 1e-12) / uniform_probability))
-    )
-    return kl_to_uniform, float(probabilities.min()), float(probabilities.max())
 
 
 def _run_experiment(cfg: BanditDLConfig, result_dir: pathlib.Path, seed: int, device: str, mode: str) -> None:
@@ -441,7 +450,7 @@ def _run_experiment(cfg: BanditDLConfig, result_dir: pathlib.Path, seed: int, de
         cumulative_arm_rewards = np.zeros((cfg.nb_honests, cfg.topology.nodes))
         cumulative_algorithm_rewards = np.zeros(cfg.nb_honests)
         algorithm_reward_history, oracle_reward_history, selected_neighbor_history, oracle_neighbor_history = [], [], [], []
-        sampler_kl_history, sampler_min_prob_history, sampler_max_prob_history = [], [], []
+        sampler_probability_history = []
         reward_min_history, reward_max_history = [], []
 
         for current_step in range(cfg.effective_rounds + 1):
@@ -455,11 +464,12 @@ def _run_experiment(cfg: BanditDLConfig, result_dir: pathlib.Path, seed: int, de
 
                 if mode == "dynamic":
                     selected_round = np.full((cfg.nb_honests, workers[0].nb_neighbors), -1, dtype=int)
-                    kl_round, min_prob_round, max_prob_round = np.zeros(cfg.nb_honests), np.zeros(cfg.nb_honests), np.zeros(cfg.nb_honests)
+                    probability_round = np.stack(
+                        [_full_sampler_probability_vector(w, cfg.topology.nodes) for w in workers],
+                    )
                     reward_min_round, reward_max_round = np.full(cfg.nb_honests, np.nan), np.full(cfg.nb_honests, np.nan)
 
                     for w in workers:
-                        kl_round[w.worker_id], min_prob_round[w.worker_id], max_prob_round[w.worker_id] = _sampler_probability_stats(w)
                         neighbor_indices = w._sample_neighbors()
                         candidate_weights = _dynamic_candidate_weights(w, honest_weights, byz_workers, current_step)
                         selected_ids = [i for i in neighbor_indices if i in candidate_weights]
@@ -486,9 +496,7 @@ def _run_experiment(cfg: BanditDLConfig, result_dir: pathlib.Path, seed: int, de
                         w.observe_neighbors(selected_ids, neighbor_weights)
                         w.aggregate(neighbor_weights)
 
-                    sampler_kl_history.append(kl_round)
-                    sampler_min_prob_history.append(min_prob_round)
-                    sampler_max_prob_history.append(max_prob_round)
+                    sampler_probability_history.append(probability_round)
                     reward_min_history.append(reward_min_round)
                     reward_max_history.append(reward_max_round)
 
@@ -507,6 +515,16 @@ def _run_experiment(cfg: BanditDLConfig, result_dir: pathlib.Path, seed: int, de
                         neighbor_matrix = selected_round.copy()
                         neighbor_matrix[neighbor_matrix >= cfg.nb_honests] = -1
                         tracker.record_drift(neighbor_disagreement(updated, neighbor_indices=neighbor_matrix.tolist()), consensus_drift(updated))
+                    _save_dynamic_metrics(
+                        result_dir,
+                        algorithm_reward_history=algorithm_reward_history,
+                        oracle_reward_history=oracle_reward_history,
+                        reward_min_history=reward_min_history,
+                        reward_max_history=reward_max_history,
+                        selected_neighbor_history=selected_neighbor_history,
+                        oracle_neighbor_history=oracle_neighbor_history,
+                        sampler_probability_history=sampler_probability_history,
+                    )
                 else:
                     # Fixed mode
                     for w in workers:
@@ -525,22 +543,21 @@ def _run_experiment(cfg: BanditDLConfig, result_dir: pathlib.Path, seed: int, de
                         updated = [w.pull(None) for w in workers]
                         tracker.record_drift(neighbor_disagreement(updated, adjacency=adjacency_honest), consensus_drift(updated))
 
+                tracker.save_snapshot()
                 _raise_if_nonfinite_weights(workers, current_step, mode)
 
         tracker.finalize(workers, mode)
     if mode == "dynamic":
-        np.save(result_dir / "reward_algorithm.npy", np.array(algorithm_reward_history))
-        np.save(result_dir / "reward_oracle.npy", np.array(oracle_reward_history))
-        np.save(result_dir / "regret.npy", np.array(oracle_reward_history) - np.array(algorithm_reward_history))
-        np.save(result_dir / "reward_selected_min.npy", np.array(reward_min_history))
-        np.save(result_dir / "reward_selected_max.npy", np.array(reward_max_history))
-        np.save(result_dir / "selected_neighbors.npy", np.array(selected_neighbor_history, dtype=int))
-        np.save(result_dir / "oracle_neighbors.npy", np.array(oracle_neighbor_history, dtype=int))
-        np.save(result_dir / "sampler_kl_to_uniform.npy", np.array(sampler_kl_history))
-        np.save(result_dir / "sampler_min_probability.npy", np.array(sampler_min_prob_history))
-        np.save(result_dir / "sampler_max_probability.npy", np.array(sampler_max_prob_history))
-        sampler_probs_final = np.stack([_full_sampler_probability_vector(w, cfg.topology.nodes) for w in workers])
-        np.save(result_dir / "sampler_probabilities_final.npy", sampler_probs_final)
+        _save_dynamic_metrics(
+            result_dir,
+            algorithm_reward_history=algorithm_reward_history,
+            oracle_reward_history=oracle_reward_history,
+            reward_min_history=reward_min_history,
+            reward_max_history=reward_max_history,
+            selected_neighbor_history=selected_neighbor_history,
+            oracle_neighbor_history=oracle_neighbor_history,
+            sampler_probability_history=sampler_probability_history,
+        )
 
 
 def run_dynamic(cfg: BanditDLConfig, result_dir: pathlib.Path, seed: int, device: str) -> None:

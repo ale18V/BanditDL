@@ -143,3 +143,51 @@ def test_metric_loader_loads_selected_reward_extrema(tmp_path):
     loaded = MetricLoader(tmp_path).load_values(MetricKey.REWARD_SELECTED_MIN)
 
     np.testing.assert_allclose(loaded, values)
+
+
+def test_sampler_probability_summaries_are_derived_from_raw_probabilities(tmp_path):
+    probabilities = np.array(
+        [
+            [[0.0, 0.25, 0.75], [0.5, 0.0, 0.5]],
+            [[0.0, 0.5, 0.5], [0.9, 0.0, 0.1]],
+        ]
+    )
+    np.save(tmp_path / "sampler_probabilities.npy", probabilities)
+
+    loader = MetricLoader(tmp_path)
+
+    np.testing.assert_allclose(
+        loader.load_values(MetricKey.SAMPLER_MIN_PROBABILITY),
+        np.array([[0.25, 0.5], [0.5, 0.1]]),
+    )
+    np.testing.assert_allclose(
+        loader.load_values(MetricKey.SAMPLER_MAX_PROBABILITY),
+        np.array([[0.75, 0.5], [0.5, 0.9]]),
+    )
+    expected_kl = np.array(
+        [
+            [
+                0.25 * np.log(0.25 / 0.5) + 0.75 * np.log(0.75 / 0.5),
+                0.0,
+            ],
+            [
+                0.0,
+                0.9 * np.log(0.9 / 0.5) + 0.1 * np.log(0.1 / 0.5),
+            ],
+        ]
+    )
+    np.testing.assert_allclose(loader.load_values(MetricKey.SAMPLER_KL_TO_UNIFORM), expected_kl)
+
+
+def test_seed_stacked_sampler_probability_summaries_are_derived_on_inner_axes(tmp_path):
+    probabilities = np.array(
+        [
+            [[[0.0, 0.25, 0.75], [0.5, 0.0, 0.5]]],
+            [[[0.0, 0.5, 0.5], [0.9, 0.0, 0.1]]],
+        ]
+    )
+    np.save(tmp_path / "sampler_probabilities_by_seed.npy", probabilities)
+
+    values = MetricLoader(tmp_path).load_seed_values(MetricKey.SAMPLER_MAX_PROBABILITY)
+
+    np.testing.assert_allclose(values, np.array([[[0.75, 0.5]], [[0.5, 0.9]]]))

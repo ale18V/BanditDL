@@ -359,7 +359,7 @@ uv run python scripts/plot_results.py \
 ```
 
 Useful options:
-- `--metric accuracies`: plot from `accuracies.npy` (default).
+- `--metric validation_accuracies`: plot from `validation_accuracies.npy` (default; `accuracies` is a legacy alias).
 - `--metric validation`: plot average accuracy from `validation`.
 - `--metric validation_worst`: plot worst-worker accuracy from `validation_worst`.
 - `--metric test`: plot held-out test accuracy from `test` (single final point when available).
@@ -373,7 +373,7 @@ Useful options:
 - `--metric neighbor_disagreement`: plot mean/median/max neighbor disagreement over rounds.
 - `--metric consensus_drift`: plot mean/median/max drift from the global average model.
 - `--metric sampler_aggressiveness`: plot KL to uniform plus min/max sampler probabilities.
-- `--metric sampler_kl_to_uniform`: plot only the KL-to-uniform node aggregates.
+- `--metric sampler_kl_to_uniform`: plot KL-to-uniform node aggregates derived from `sampler_probabilities.npy`.
 - `--stat mean|worst`: choose mean worker or worst worker; for regret, worst means highest regret.
 - `--legend outside|best|none`: choose legend placement; default keeps it below the plot.
 - `--max-label-length 48`: cap auto-generated labels.
@@ -553,9 +553,8 @@ Dynamic runs also save hindsight diagnostics for every sampler, including unifor
 - `reward_selected_max.npy`: per-round, per-node maximum reward among selected neighbors.
 - `selected_neighbors.npy`: sampled neighbors per round and worker.
 - `oracle_neighbors.npy`: best fixed hindsight neighbors per round and worker.
-- `sampler_kl_to_uniform.npy`: per-round, per-node KL divergence from the sampler distribution to uniform.
-- `sampler_min_probability.npy`: per-round, per-node minimum sampler probability.
-- `sampler_max_probability.npy`: per-round, per-node maximum sampler probability.
+- `sampler_probabilities.npy`: per-round sampler probabilities with shape `(rounds, honest_workers, total_nodes)`.
+- KL-to-uniform, minimum probability, and maximum probability curves are derived from `sampler_probabilities.npy` when plotting.
 
 The automatic plot `plots/sampler_aggressiveness.png` shows:
 - KL divergence to uniform aggregated across nodes by average, median, min, and max.
