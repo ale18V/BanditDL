@@ -1,2 +1,15 @@
 dataset: mnist
 model: cnn_mnist
+numb_labels: 10
+provider:
+  _target_: banditdl.data.providers.TorchvisionProvider
+  name: mnist
+partitioner:
+  _target_: banditdl.data.partitioning.SyntheticPartitionStrategy
+  method: ${heterogeneity.method}
+  num_classes: ${dataset.numb_labels}
+  clusters: ${heterogeneity.clusters}
+  alpha: ${heterogeneity.alpha}
+  classes_per_group: ${heterogeneity.classes_per_group}
+  group_overlap: ${heterogeneity.group_overlap}
+  gamma_similarity: ${heterogeneity.gamma_similarity}

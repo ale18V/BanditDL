@@ -1,9 +1,11 @@
 """Data package for dataset loading and neural network models."""
 
 from . import models
-from .dataset import make_train_validation_test_datasets
+from .dataset import DatasetBuildConfig, DatasetBundle, build_dataset_bundle
 
 __all__ = [
-    "make_train_validation_test_datasets",
+    "DatasetBuildConfig",
+    "DatasetBundle",
+    "build_dataset_bundle",
     "models",
 ]

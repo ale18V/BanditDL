@@ -1,9 +1,8 @@
-dataset: cifar10
-model: cnn_cifar
-numb_labels: 10
+dataset: femnist
+model: cnn_femnist
+numb_labels: 62
 provider:
-  _target_: banditdl.data.providers.TorchvisionProvider
-  name: cifar10
+  _target_: banditdl.data.providers.FemnistProvider
 partitioner:
   _target_: banditdl.data.partitioning.SyntheticPartitionStrategy
   method: ${heterogeneity.method}

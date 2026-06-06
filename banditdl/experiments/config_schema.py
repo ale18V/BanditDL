@@ -8,9 +8,9 @@ from typing import Any
 class DatasetConfig:
     dataset: str = "mnist"
     model: str = "MnistNet"
-    mode: str | None = None
-    nb_writers_limit: int | None = None
     numb_labels: int = 10
+    provider: dict[str, Any] = field(default_factory=dict)
+    partitioner: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -92,6 +92,11 @@ class BanditDLConfig:
     @property
     def resolved_reward_name(self) -> str:
         return str(self.sampler.get("reward", "parameter_distance"))
+
+    @property
+    def uses_natural_partition(self) -> bool:
+        target = str(self.dataset.partitioner.get("_target_", ""))
+        return target.endswith("NaturalOwnerPartitionStrategy")
 
     @property
     def total_nodes(self) -> int:

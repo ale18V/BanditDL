@@ -159,6 +159,8 @@ uv run -m banditdl -m \
 Dataset:
 - `mnist`
 - `cifar10`
+- `femnist`: natural writer-based partitioning
+- `femnist_pool`: synthetic partitioning of pooled FEMNIST samples
 
 Topology:
 - `dynamic`
@@ -201,8 +203,15 @@ uv run -m banditdl --cfg job
 
 Dataset configs are in `conf/dataset/`.
 
-- `dataset`: dataset name passed to the loader. Common values: `mnist`, `cifar10`.
+- `dataset`: dataset name used in logs and run names.
 - `model`: model constructor from `banditdl/data/models.py`, for example `cnn_mnist` or `cnn_cifar_old`.
+- `numb_labels`: number of output classes.
+- `provider`: Hydra-instantiated dataset loader.
+- `partitioner`: Hydra-instantiated natural or synthetic partition strategy.
+
+`dataset=femnist` assigns one writer to each honest node and holds out complete
+writers for global evaluation. `dataset=femnist_pool` pools all writers and
+applies the selected `heterogeneity` profile like MNIST or CIFAR-10.
 
 ### Heterogeneity Config
 
@@ -442,7 +451,10 @@ hydra.sweeper.params + CLI overrides]
   - Byzantine attacks and robust aggregation rules.
 
 - `banditdl.data.*`
-  - Dataset loading/partitioning and model construction.
+  - `providers`: loads a dataset into training/evaluation views and metadata.
+  - `partitioning`: assigns sample indices using synthetic or natural strategies.
+  - `dataset`: builds loaders and returns a typed `DatasetBundle`.
+  - `models`: model construction.
 
 - `banditdl.core.sampling`
   - Neighbor sampler implementations and reward strategies.

@@ -60,7 +60,7 @@ case "$SWEEP" in
           for seed in "${SEEDS[@]}"; do
             name="fmpool_${alpha}_${sampler}_s${sampling}_seed${seed}"
             submit_one "$name" \
-              "dataset=femnist dataset.mode=pool optimization=opt_femnist sampler=$sampler heterogeneity=$alpha topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS seed=$seed"
+              "dataset=femnist_pool optimization=opt_femnist sampler=$sampler heterogeneity=$alpha topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS seed=$seed"
             count=$((count + 1))
           done
         done
@@ -92,7 +92,7 @@ case "$SWEEP" in
           for seed in "${SEEDS[@]}"; do
             name="fmpool_${group}_${sampler}_s${sampling}_seed${seed}"
             submit_one "$name" \
-              "dataset=femnist dataset.mode=pool optimization=opt_femnist sampler=$sampler heterogeneity=$group topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS seed=$seed"
+              "dataset=femnist_pool optimization=opt_femnist sampler=$sampler heterogeneity=$group topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS seed=$seed"
             count=$((count + 1))
           done
         done
@@ -163,7 +163,7 @@ case "$SWEEP" in
       for seed in "${LOCAL_SEEDS[@]}"; do
         name="fmpoolgrp_bandit_s${sampling}_seed${seed}"
         submit_one "$name" \
-          "dataset=femnist dataset.mode=pool optimization=opt_femnist sampler=bandit heterogeneity=pathological_5g_2c adversary=none topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS evaluation.evaluation_delta=20 seed=$seed"
+          "dataset=femnist_pool optimization=opt_femnist sampler=bandit heterogeneity=pathological_5g_2c adversary=none topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS evaluation.evaluation_delta=20 seed=$seed"
         count=$((count + 1))
       done
     done

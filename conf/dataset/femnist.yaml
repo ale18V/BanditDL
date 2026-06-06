@@ -1,9 +1,8 @@
 dataset: femnist
 model: cnn_femnist
 numb_labels: 62
-# Selects how FEMNIST is dispatched to workers:
-#   writer_per_node: one FEMNIST writer per honest node. heterogeneity=* is ignored.
-#   pool           : concatenate writers and apply heterogeneity=* as on torchvision datasets.
-mode: writer_per_node
-# Optional cap on the writer pool to draw from (writer mode only). null = use all writers.
-nb_writers_limit: null
+provider:
+  _target_: banditdl.data.providers.FemnistProvider
+partitioner:
+  _target_: banditdl.data.partitioning.NaturalOwnerPartitionStrategy
+  writers_limit: null

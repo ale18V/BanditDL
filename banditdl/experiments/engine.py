@@ -9,6 +9,7 @@ from dataclasses import replace
 import numpy as np
 import numpy.lib.format
 import torch
+from hydra.utils import instantiate
 
 from banditdl.core.sampling import (
     SamplerContext,
@@ -18,10 +19,9 @@ from banditdl.core.sampling import (
 from banditdl.core.worker.byzantine import ByzantineWorker
 from banditdl.core.worker.config import WorkerConfig
 from banditdl.core.worker.dynamic import DynamicWorker
-from banditdl.data import dataset
+from banditdl.data import DatasetBuildConfig, build_dataset_bundle
 from banditdl.experiments.config_schema import BanditDLConfig
 from banditdl.utils.math_utils import consensus_drift, neighbor_disagreement
-from banditdl.utils.results import make_result_file, store_result
 
 logger = logging.getLogger(__name__)
 
@@ -400,28 +400,20 @@ def run_experiment(
 ) -> None:
     _setup_seed(seed)
     _log_start(cfg, result_dir)
-    train_dict, local_test_dict, test_loader, test_loader_sub, dist_stats = (
-        dataset.make_train_validation_test_datasets(
-            cfg.dataset.dataset,
-            numb_labels=cfg.dataset.numb_labels,
-            alpha_dirichlet=cfg.heterogeneity.alpha,
-            honest_workers=cfg.nb_honests,
+    data = build_dataset_bundle(
+        instantiate(cfg.dataset.provider),
+        instantiate(cfg.dataset.partitioner),
+        DatasetBuildConfig(
+            nodes=cfg.nb_honests,
             train_batch=cfg.optimization.batch_size,
             test_batch=100,
             global_test_ratio=cfg.evaluation.global_test_ratio,
             local_test_ratio=cfg.evaluation.local_test_ratio,
-            split_seed=cfg.evaluation.split_seed,
-            partition_method=cfg.heterogeneity.method,
-            clusters=cfg.heterogeneity.clusters,
-            classes_per_group=cfg.heterogeneity.classes_per_group,
-            group_overlap=cfg.heterogeneity.group_overlap,
-            gamma_similarity=cfg.heterogeneity.gamma_similarity,
-            dataset_mode=cfg.dataset.mode,
-            nb_writers_limit=cfg.dataset.nb_writers_limit,
-        )
+            seed=cfg.evaluation.split_seed,
+        ),
     )
 
-    honest_workers = _init_workers(cfg, train_dict, local_test_dict, device)
+    honest_workers = _init_workers(cfg, data.train, data.local_test, device)
     bw_cfg = _build_worker_config(cfg, device)
     byz_workers = [
         ByzantineWorker(i, honest_workers[0].model_size, bw_cfg)
@@ -429,20 +421,10 @@ def run_experiment(
     ]
     byz_by_id = {byz.worker_id: byz for byz in byz_workers}
 
-    with ResultTracker(cfg, result_dir, test_loader, test_loader_sub) as tracker:
+    with ResultTracker(cfg, result_dir, data.global_test, data.tracking_test) as tracker:
         tracker.save_audit(
             {
-                "partition": {
-                    "method": cfg.heterogeneity.method,
-                    "seed": cfg.evaluation.split_seed,
-                    "requested_clusters": cfg.heterogeneity.clusters,
-                    "resolved_clusters": cfg.resolved_clusters,
-                    "alpha": cfg.heterogeneity.alpha,
-                    "classes_per_group": cfg.heterogeneity.classes_per_group,
-                    "group_overlap": cfg.heterogeneity.group_overlap,
-                    "gamma_similarity": cfg.heterogeneity.gamma_similarity,
-                },
-                "distribution": dist_stats,
+                **data.audit,
                 "participants": {
                     "total": cfg.topology.nodes,
                     "honest": cfg.nb_honests,

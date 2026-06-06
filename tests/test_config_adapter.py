@@ -8,7 +8,21 @@ from banditdl.experiments.engine import _build_worker_config
 def _base_cfg():
     return OmegaConf.create(
         {
-            "dataset": {"dataset": "mnist", "model": "cnn_mnist", "numb_labels": 10},
+            "dataset": {
+                "dataset": "mnist",
+                "model": "cnn_mnist",
+                "numb_labels": 10,
+                "provider": {
+                    "_target_": "banditdl.data.providers.TorchvisionProvider",
+                    "name": "mnist",
+                },
+                "partitioner": {
+                    "_target_": "banditdl.data.partitioning.SyntheticPartitionStrategy",
+                    "method": "dirichlet",
+                    "num_classes": 10,
+                    "alpha": 0.5,
+                },
+            },
             "topology": {"nodes": 30, "sampling": 0.2},
             "sampler": {
                 "name": "epsilon_greedy",
@@ -140,15 +154,18 @@ def test_build_engine_config_pathological_grouped_classes_with_overlap_token():
     assert "clustered_3_pathological_c_3_ov_1" in run_cfg.run_name
 
 
-def test_build_engine_config_femnist_writer_mode_bypasses_alpha():
+def test_build_engine_config_femnist_natural_partition_bypasses_alpha():
     cfg = _base_cfg()
     cfg.dataset = OmegaConf.create(
         {
             "dataset": "femnist",
             "model": "cnn_femnist",
             "numb_labels": 62,
-            "mode": "writer_per_node",
-            "nb_writers_limit": None,
+            "provider": {"_target_": "banditdl.data.providers.FemnistProvider"},
+            "partitioner": {
+                "_target_": "banditdl.data.partitioning.NaturalOwnerPartitionStrategy",
+                "writers_limit": None,
+            },
         }
     )
     cfg.heterogeneity = OmegaConf.create(
@@ -161,9 +178,9 @@ def test_build_engine_config_femnist_writer_mode_bypasses_alpha():
     run_cfg = build_engine_config(cfg)
 
     assert run_cfg.config.dataset.dataset == "femnist"
-    assert run_cfg.config.dataset.mode == "writer_per_node"
+    assert run_cfg.config.uses_natural_partition
     assert run_cfg.config.dataset.numb_labels == 62
-    assert "femnist_writers" in run_cfg.run_name
+    assert "natural_owners" in run_cfg.run_name
 
 
 def test_build_engine_config_femnist_pool_mode_uses_heterogeneity():
@@ -173,23 +190,28 @@ def test_build_engine_config_femnist_pool_mode_uses_heterogeneity():
             "dataset": "femnist",
             "model": "cnn_femnist",
             "numb_labels": 62,
-            "mode": "pool",
-            "nb_writers_limit": None,
+            "provider": {"_target_": "banditdl.data.providers.FemnistProvider"},
+            "partitioner": {
+                "_target_": "banditdl.data.partitioning.SyntheticPartitionStrategy",
+                "method": "dirichlet",
+                "num_classes": 62,
+                "alpha": 0.5,
+            },
         }
     )
 
     run_cfg = build_engine_config(cfg)
 
-    assert run_cfg.config.dataset.mode == "pool"
+    assert not run_cfg.config.uses_natural_partition
     assert run_cfg.config.heterogeneity.alpha == 0.5
     assert "alpha_0.5" in run_cfg.run_name
 
 
-def test_build_engine_config_writer_mode_rejects_non_femnist():
+def test_build_engine_config_requires_provider_target():
     cfg = _base_cfg()
-    cfg.dataset.mode = "writer_per_node"
+    cfg.dataset.provider = {}
 
-    with pytest.raises(ValueError, match="FEMNIST"):
+    with pytest.raises(ValueError, match="provider"):
         build_engine_config(cfg)
 
 

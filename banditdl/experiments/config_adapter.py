@@ -33,8 +33,9 @@ def build_engine_config(cfg: DictConfig) -> EngineRunConfig:
 
 def _validate_config(c: BanditDLConfig) -> None:
     _validate_topology(c)
-    _validate_heterogeneity(c)
     _validate_dataset(c)
+    if not c.uses_natural_partition:
+        _validate_heterogeneity(c)
 
 
 def _validate_topology(c: BanditDLConfig) -> None:
@@ -54,7 +55,10 @@ def _validate_heterogeneity(c: BanditDLConfig) -> None:
         raise ValueError("heterogeneity.clusters must be between 1 and the honest-node count")
     if c.nb_honests % clusters:
         raise ValueError("the honest-node count must be divisible by heterogeneity.clusters")
-    if c.heterogeneity.gamma_similarity is not None and not 0 <= c.heterogeneity.gamma_similarity <= 1:
+    if (
+        c.heterogeneity.gamma_similarity is not None
+        and not 0 <= c.heterogeneity.gamma_similarity <= 1
+    ):
         raise ValueError("heterogeneity.gamma_similarity must be in [0, 1]")
 
     method = c.heterogeneity.method
@@ -72,8 +76,10 @@ def _validate_heterogeneity(c: BanditDLConfig) -> None:
 
 
 def _validate_dataset(c: BanditDLConfig) -> None:
-    if c.dataset.mode == "writer_per_node" and c.dataset.dataset != "femnist":
-        raise ValueError("dataset.mode='writer_per_node' is only valid for FEMNIST")
+    if not c.dataset.provider.get("_target_"):
+        raise ValueError("dataset.provider._target_ is required")
+    if not c.dataset.partitioner.get("_target_"):
+        raise ValueError("dataset.partitioner._target_ is required")
 
 
 def _run_name(c: BanditDLConfig, byz_budget: int) -> str:
@@ -92,8 +98,9 @@ def _run_name(c: BanditDLConfig, byz_budget: int) -> str:
 
 
 def _partition_token(c: BanditDLConfig) -> str:
-    if c.dataset.mode == "writer_per_node":
-        return _femnist_writer_token(c)
+    if c.uses_natural_partition:
+        limit = c.dataset.partitioner.get("writers_limit")
+        return "natural_owners" if limit is None else f"natural_owners_cap_{limit}"
 
     method = c.heterogeneity.method
     # Common prefix
@@ -116,11 +123,6 @@ def _partition_token(c: BanditDLConfig) -> str:
         details += f"_gamma_{c.heterogeneity.gamma_similarity}"
 
     return f"{prefix}_{details}" if details else prefix
-
-
-def _femnist_writer_token(c: BanditDLConfig) -> str:
-    cap = c.dataset.nb_writers_limit
-    return "femnist_writers" if cap is None else f"femnist_writers_cap_{cap}"
 
 
 def resolve_device(cfg: DictConfig) -> str:
