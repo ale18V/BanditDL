@@ -19,8 +19,8 @@ Pass `threshold` to keep only edges whose weight exceeds it (e.g. drop the
 near-uniform exploration edges of an epsilon-greedy sampler), and/or
 `top_edges_per_node` to keep only each node's strongest outgoing edges.
 
-When the run's heterogeneity is `grouped_classes`, nodes are colored by group
-and laid out on concentric clusters; otherwise a spring layout is used.
+For clustered pathological partitions, nodes are colored by cluster and laid
+out on concentric clusters; otherwise a spring layout is used.
 """
 
 from __future__ import annotations
@@ -35,35 +35,32 @@ import numpy as np
 from matplotlib import cm
 from omegaconf import OmegaConf
 
+from banditdl.utils.metrics import trim_unwritten_probability_rounds
+
 WeightSource = Literal["sampler_probability", "neighbor_disagreement"]
 
 
 def _hydra_cfg(run_dir: pathlib.Path):
-    for candidate in (run_dir / ".hydra" / "config.yaml", run_dir.parent / ".hydra" / "config.yaml"):
+    for candidate in (
+        run_dir / ".hydra" / "config.yaml",
+        run_dir.parent / ".hydra" / "config.yaml",
+    ):
         if candidate.is_file():
             return OmegaConf.load(candidate)
     return None
 
 
 def _worker_groups(cfg, n_honest: int) -> np.ndarray | None:
-    """Return per-worker group id for `grouped_classes` partitions, else None."""
+    """Return per-worker cluster IDs for clustered pathological partitions."""
     if cfg is None:
         return None
     het = cfg.get("heterogeneity", {})
     if str(het.get("method", "")) != "pathological":
         return None
-    if str(het.get("partition", "")) != "grouped_classes":
+    nb_groups = int(het.get("clusters") or n_honest)
+    if nb_groups == n_honest:
         return None
-    nb_groups = int(het.get("nb_groups", 1))
-    sizes = [n_honest // nb_groups] * nb_groups
-    for i in range(n_honest % nb_groups):
-        sizes[i] += 1
-    assignment = np.empty(n_honest, dtype=int)
-    cursor = 0
-    for g, size in enumerate(sizes):
-        assignment[cursor : cursor + size] = g
-        cursor += size
-    return assignment
+    return np.repeat(np.arange(nb_groups), n_honest // nb_groups)
 
 
 def _load_weights(
@@ -82,9 +79,15 @@ def _load_weights(
         by_seed_path = run_dir / "sampler_probabilities_final_by_seed.npy"
         path = run_dir / "sampler_probabilities_final.npy"
         if full_by_seed_path.is_file():
-            prob = np.nanmean(np.load(full_by_seed_path)[:, -1], axis=0)
+            history = trim_unwritten_probability_rounds(np.load(full_by_seed_path))
+            if history.shape[1] == 0:
+                raise ValueError(f"{full_by_seed_path} has no completed rounds")
+            prob = np.nanmean(history[:, -1], axis=0)
         elif full_path.is_file():
-            prob = np.load(full_path)[-1]
+            history = trim_unwritten_probability_rounds(np.load(full_path))
+            if history.shape[0] == 0:
+                raise ValueError(f"{full_path} has no completed rounds")
+            prob = history[-1]
         elif by_seed_path.is_file():
             prob = np.nanmean(np.load(by_seed_path), axis=0)
         elif path.is_file():

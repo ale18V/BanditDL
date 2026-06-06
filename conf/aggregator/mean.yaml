@@ -1,3 +1,3 @@
-pre-aggregator: nnm
+pre_aggregator: nnm
 aggregator: average
 rag: true

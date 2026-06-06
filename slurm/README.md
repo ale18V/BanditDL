@@ -47,7 +47,7 @@ sbatch slurm/sbatch_banditdl_gpu.sh dataset=femnist topology.nodes=30
 
 # CIFAR-10 with the grouped clustering partition
 sbatch slurm/sbatch_banditdl_gpu.sh \
-    dataset=cifar10 sampler=bandit heterogeneity=grouped_5x2 topology.nodes=30 seed=0
+    dataset=cifar10 sampler=bandit heterogeneity=pathological_5g_2c topology.nodes=30 seed=0
 ```
 
 All positional args are forwarded to `uv run -m banditdl`. `device=cuda` (GPU script) or `device=cpu` (CPU script) is added automatically unless you provide your own `device=` override.

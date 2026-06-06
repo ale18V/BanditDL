@@ -38,7 +38,7 @@ case "$SWEEP" in
   cifar_dirichlet)
     NODES=30
     ROUNDS=500
-    for alpha in alpha0.5 alpha1 alpha10.0; do
+    for alpha in dirichlet_alpha0.5 dirichlet_alpha1 dirichlet_alpha10; do
       for sampler in "${SAMPLERS[@]}"; do
         for sampling in "${SAMPLINGS[@]}"; do
           for seed in "${SEEDS[@]}"; do
@@ -54,7 +54,7 @@ case "$SWEEP" in
   femnist_pool_dirichlet)
     NODES=30
     ROUNDS=300
-    for alpha in alpha0.5 alpha1 alpha10.0; do
+    for alpha in dirichlet_alpha0.5 dirichlet_alpha1 dirichlet_alpha10; do
       for sampler in "${SAMPLERS[@]}"; do
         for sampling in "${SAMPLINGS[@]}"; do
           for seed in "${SEEDS[@]}"; do
@@ -70,7 +70,7 @@ case "$SWEEP" in
   cifar_grouped)
     NODES=30
     ROUNDS=500
-    for group in grouped_5x2 grouped_2x5; do
+    for group in pathological_5g_2c pathological_2g_5c; do
       for sampler in "${SAMPLERS[@]}"; do
         for sampling in "${SAMPLINGS[@]}"; do
           for seed in "${SEEDS[@]}"; do
@@ -86,7 +86,7 @@ case "$SWEEP" in
   femnist_pool_grouped)
     NODES=30
     ROUNDS=300
-    for group in grouped_5x2 grouped_2x5; do
+    for group in pathological_5g_2c pathological_2g_5c; do
       for sampler in "${SAMPLERS[@]}"; do
         for sampling in "${SAMPLINGS[@]}"; do
           for seed in "${SEEDS[@]}"; do
@@ -115,7 +115,7 @@ case "$SWEEP" in
     ;;
   femnist_pool_clustering)
     # Cluster-formation study on FEMNIST (pool mode): 30 nodes, disjoint label
-    # groups via grouped_5x2 -> 5 clusters of 6 nodes, 2 labels each.
+    # groups via pathological_5g_2c -> 5 clusters of 6 nodes, 2 labels each.
     # Sweeps topology.sampling x seed with the bandit sampler, no adversaries.
     # Mirrors cifar_grouped_clustering's grid for direct comparison.
     NODES=30
@@ -126,7 +126,7 @@ case "$SWEEP" in
       for seed in "${LOCAL_SEEDS[@]}"; do
         name="fmpoolgrp_bandit_s${sampling}_seed${seed}"
         submit_one "$name" \
-          "dataset=femnist dataset.mode=pool optimization=opt_femnist sampler=bandit heterogeneity=grouped_5x2 adversary=none topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS evaluation.evaluation_delta=20 seed=$seed"
+          "dataset=femnist dataset.mode=pool optimization=opt_femnist sampler=bandit heterogeneity=pathological_5g_2c adversary=none topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS evaluation.evaluation_delta=20 seed=$seed"
         count=$((count + 1))
       done
     done

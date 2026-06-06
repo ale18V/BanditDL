@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import pathlib
 import random
@@ -14,12 +15,9 @@ from banditdl.core.sampling import (
     make_neighbor_sampler,
     make_reward_strategy,
 )
-from banditdl.core.topology.fxgraph import generate_connected_graph
-from banditdl.core.topology.graph import CommunicationNetwork
-from banditdl.core.worker.byzantine import ByzantineWorker, DecByzantineWorker
+from banditdl.core.worker.byzantine import ByzantineWorker
 from banditdl.core.worker.config import WorkerConfig
 from banditdl.core.worker.dynamic import DynamicWorker
-from banditdl.core.worker.fixed import FixedGraphWorker
 from banditdl.data import dataset
 from banditdl.experiments.config_schema import BanditDLConfig
 from banditdl.utils.math_utils import consensus_drift, neighbor_disagreement
@@ -44,9 +42,9 @@ def _should_log_step(current_step: int, rounds: int) -> bool:
     return current_step in (0, rounds) or current_step % _progress_interval(rounds) == 0
 
 
-def _log_start(mode: str, cfg: BanditDLConfig, result_dir: pathlib.Path) -> None:
+def _log_start(cfg: BanditDLConfig, result_dir: pathlib.Path) -> None:
     print(
-        f"[banditdl] starting {mode} run: "
+        "[banditdl] starting run: "
         f"dataset={cfg.dataset.dataset}, model={cfg.dataset.model}, nodes={cfg.topology.nodes}, "
         f"honest={cfg.nb_honests}, byzantine={cfg.adversary.byzcount}, "
         f"rounds={cfg.effective_rounds}, seed={cfg.seed}, device={cfg.device}",
@@ -56,14 +54,13 @@ def _log_start(mode: str, cfg: BanditDLConfig, result_dir: pathlib.Path) -> None
 
 
 def _log_progress(
-    mode: str,
     current_step: int,
     cfg: BanditDLConfig,
     accuracy=None,
     validation_loss=None,
     train_loss=None,
 ) -> None:
-    message = f"[banditdl] {mode} round {current_step}/{cfg.effective_rounds}"
+    message = f"[banditdl] round {current_step}/{cfg.effective_rounds}"
     if accuracy is not None:
         message += f" | mean_accuracy={accuracy:.4f}"
     if validation_loss is not None:
@@ -73,17 +70,16 @@ def _log_progress(
     print(message, flush=True)
 
 
-def _log_done(mode: str) -> None:
-    print(f"[banditdl] finished {mode} run", flush=True)
+def _log_done() -> None:
+    print("[banditdl] finished run", flush=True)
 
 
-def _raise_if_nonfinite_weights(workers, current_step: int, mode: str) -> None:
+def _raise_if_nonfinite_weights(workers, current_step: int) -> None:
     for worker in workers:
         weights = worker.pull(None)
         if not torch.isfinite(weights).all():
             raise FloatingPointError(
-                f"{mode} produced non-finite weights at round {current_step} "
-                f"for worker {worker.worker_id}"
+                f"produced non-finite weights at round {current_step} for worker {worker.worker_id}"
             )
 
 
@@ -127,16 +123,18 @@ def _record_final_evaluation_if_needed(
     v_losses,
     t_losses,
 ):
-    if cfg.evaluation.evaluation_delta <= 0:
+    evaluation = getattr(cfg, "evaluation", cfg)
+    rounds = cfg.effective_rounds if hasattr(cfg, "effective_rounds") else cfg.rounds
+    if evaluation.evaluation_delta <= 0:
         return None, None, None
-    if v_steps and v_steps[-1] == cfg.effective_rounds:
+    if v_steps and v_steps[-1] == rounds:
         return None, None, None
     return _record_evaluation(
         workers,
         fd_val,
         fd_v_loss,
         fd_t_loss,
-        cfg.effective_rounds,
+        rounds,
         v_steps,
         v_accs,
         v_losses,
@@ -174,20 +172,24 @@ class ResultTracker:
 
         self.prob_file = result_dir / "sampler_probabilities.npy"
         self.probs_mmap = None
-        if cfg.topology.sampling is not None:
+        if cfg.effective_rounds > 0:
             import numpy.lib.format
 
             self.probs_mmap = numpy.lib.format.open_memmap(
                 self.prob_file,
                 dtype="float32",
                 mode="w+",
-                shape=(cfg.effective_rounds, cfg.total_nodes, cfg.total_nodes),
+                shape=(cfg.effective_rounds, cfg.nb_honests, cfg.topology.nodes),
             )
+            self.probs_mmap[:] = np.nan
+            self.probs_mmap.flush()
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            self.save_snapshot()
         for fd in [
             self.fd_validation,
             self.fd_validation_worst,
@@ -199,10 +201,7 @@ class ResultTracker:
             self.probs_mmap.flush()
 
     def save_audit(self, audit_data: dict):
-        """Save a detailed audit manifest of the experiment initial state."""
-        import json
-
-        with open(self.result_dir / "audit.json", "w") as f:
+        with (self.result_dir / "audit.json").open("w") as f:
             json.dump(audit_data, f, indent=2)
 
     def evaluate_step(self, step, workers, mode):
@@ -223,7 +222,7 @@ class ResultTracker:
                 self.train_losses,
             )
         if _should_log_step(step, self.cfg.effective_rounds):
-            _log_progress(mode, step, self.cfg, mean_acc, mean_v, mean_t)
+            _log_progress(step, self.cfg, mean_acc, mean_v, mean_t)
         return mean_acc, mean_v, mean_t
 
     def record_gradient_norms(self, workers):
@@ -239,9 +238,9 @@ class ResultTracker:
     def record_probabilities(self, step, workers):
         if self.probs_mmap is not None and step < self.cfg.effective_rounds:
             probs = np.stack(
-                [_full_sampler_probability_vector(w, self.cfg.total_nodes) for w in workers]
+                [_full_sampler_probability_vector(w, self.cfg.topology.nodes) for w in workers]
             )
-            self.probs_mmap[step, :, :] = probs.astype("float32")
+            self.probs_mmap[step] = probs.astype("float32")
             if step % 10 == 0:
                 self.probs_mmap.flush()
 
@@ -255,31 +254,31 @@ class ResultTracker:
 
     def save_snapshot(self):
         d = self.result_dir
-        np.save(d / "validation_accuracies.npy", np.array(self.validation_accuracies))
-        np.save(d / "validation_losses.npy", np.array(self.validation_losses))
-        np.save(d / "train_losses.npy", np.array(self.train_losses))
-        np.save(d / "neighbor_disagreement.npy", np.array(self.neighbor_disagreement_history))
-        np.save(d / "consensus_drift.npy", np.array(self.consensus_drift_history))
-        np.save(d / "gradient_norms.npy", np.array(self.gradient_norm_history))
+        _atomic_save(d / "validation_accuracies.npy", self.validation_accuracies)
+        _atomic_save(d / "validation_losses.npy", self.validation_losses)
+        _atomic_save(d / "train_losses.npy", self.train_losses)
+        _atomic_save(d / "neighbor_disagreement.npy", self.neighbor_disagreement_history)
+        _atomic_save(d / "consensus_drift.npy", self.consensus_drift_history)
+        _atomic_save(d / "gradient_norms.npy", self.gradient_norm_history)
         if self.algorithm_reward_history:
-            np.save(d / "reward_algorithm.npy", np.array(self.algorithm_reward_history))
-            np.save(d / "reward_oracle.npy", np.array(self.oracle_reward_history))
-            np.save(d / "reward_selected_min.npy", np.array(self.reward_min_history))
-            np.save(d / "reward_selected_max.npy", np.array(self.reward_max_history))
-            np.save(
+            _atomic_save(d / "reward_algorithm.npy", self.algorithm_reward_history)
+            _atomic_save(d / "reward_oracle.npy", self.oracle_reward_history)
+            _atomic_save(d / "reward_selected_min.npy", self.reward_min_history)
+            _atomic_save(d / "reward_selected_max.npy", self.reward_max_history)
+            _atomic_save(
                 d / "selected_neighbors.npy",
-                np.array(self.selected_neighbor_history, dtype=int),
+                self.selected_neighbor_history,
+                dtype=int,
             )
-            np.save(
+            _atomic_save(
                 d / "oracle_neighbors.npy",
-                np.array(self.oracle_neighbor_history, dtype=int),
+                self.oracle_neighbor_history,
+                dtype=int,
             )
-            regret = np.array(self.oracle_reward_history) - np.array(
-                self.algorithm_reward_history
-            )
-            np.save(d / "regret.npy", regret)
+            regret = np.array(self.oracle_reward_history) - np.array(self.algorithm_reward_history)
+            _atomic_save(d / "regret.npy", regret)
 
-    def finalize(self, workers, mode):
+    def finalize(self, workers):
         _record_final_evaluation_if_needed(
             self.cfg,
             workers,
@@ -306,7 +305,14 @@ class ResultTracker:
             weights = torch.stack([w.pull(None) for w in workers])
             dist = torch.cdist(weights, weights).cpu().numpy()
         np.save(self.result_dir / "pairwise_model_distance_final.npy", dist)
-        _log_done(mode)
+        _log_done()
+
+
+def _atomic_save(path: pathlib.Path, values, dtype=None) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("wb") as fd:
+        np.save(fd, np.asarray(values, dtype=dtype))
+    os.replace(tmp, path)
 
 
 def _build_worker_config(cfg: BanditDLConfig, device: str) -> WorkerConfig:
@@ -320,7 +326,7 @@ def _build_worker_config(cfg: BanditDLConfig, device: str) -> WorkerConfig:
         momentum=cfg.optimization.momentum_worker,
         device=device,
         nb_local_steps=cfg.optimization.nb_local_steps,
-        nb_workers=cfg.total_nodes,
+        nb_workers=cfg.topology.nodes,
         nb_byz=cfg.adversary.byzcount,
         nb_real_byz=cfg.adversary.byzcount,
         b_hat=cfg.adversary.byzantine_budget
@@ -335,39 +341,33 @@ def _build_worker_config(cfg: BanditDLConfig, device: str) -> WorkerConfig:
         bucket_size=cfg.aggregator.bucket_size,
         aggregator=cfg.aggregator.aggregator,
         pre_aggregator=cfg.aggregator.pre_aggregator,
-        nb_neighbors=cfg.topology.degree,
         sampling_ratio=cfg.topology.sampling,
         mimic_learning_phase=cfg.adversary.mimic_learning_phase,
-        method=cfg.topology.method or cfg.topology.neighbor_sampler,
-        epsilon=1.0,
     )
 
 
-def _init_workers(
-    cfg: BanditDLConfig, train_dict, test_dict, device: str, graph=None, dissensus=False
-):
+def _init_workers(cfg: BanditDLConfig, train_dict, test_dict, device: str):
     workers = []
     base_config = _build_worker_config(cfg, device)
     for worker_id in range(cfg.nb_honests):
-        if graph is not None:
-            config = replace(base_config, comm_graph=graph, dissensus=dissensus)
-        else:
-            s_params = dict(cfg.sampler.get("params", {}) if cfg.sampler else {})
-            s_ctx = SamplerContext(
-                worker_id, cfg.total_nodes, 1, cfg.effective_rounds + 1, cfg.seed + worker_id
-            )
-            n_sampler = make_neighbor_sampler(
-                cfg.resolved_sampler_name, context=s_ctx, params=s_params
-            )
-            config = replace(
-                base_config,
-                neighbor_sampler=n_sampler,
-                reward_strategy=make_reward_strategy(cfg.topology.bandit_reward),
-            )
-
-        w = (FixedGraphWorker if graph else DynamicWorker)(
-            worker_id, train_dict[worker_id], test_dict[worker_id], config
+        s_params = dict(cfg.sampler.get("params", {}) if cfg.sampler else {})
+        s_ctx = SamplerContext(
+            worker_id,
+            cfg.topology.nodes,
+            1,
+            cfg.effective_rounds + 1,
+            cfg.seed + worker_id,
         )
+        config = replace(
+            base_config,
+            neighbor_sampler=make_neighbor_sampler(
+                cfg.resolved_sampler_name,
+                context=s_ctx,
+                params=s_params,
+            ),
+            reward_strategy=make_reward_strategy(cfg.resolved_reward_name),
+        )
+        w = DynamicWorker(worker_id, train_dict[worker_id], test_dict[worker_id], config)
         if worker_id > 0:
             w.model.load_state_dict(workers[0].model.state_dict())
         workers.append(w)
@@ -380,6 +380,11 @@ def _best_fixed_subset(scores, worker_id: int, k: int):
     selected = sorted(candidates, key=lambda i: scores[i], reverse=True)[:k]
     reward = 0.0 if not selected else float(scores[selected].sum() / len(selected))
     return np.array(selected, dtype=int), reward
+
+
+def _mean_selected_reward(rewards) -> float:
+    rewards = list(rewards)
+    return float(sum(rewards) / len(rewards)) if rewards else 0.0
 
 
 def _dynamic_candidate_weights(w, honest_weights, byz_workers, step):
@@ -426,7 +431,7 @@ def _step_dynamic(
         s_rewards = [rewards_by_id[i] for i in sel_ids]
         if s_rewards:
             r_min_round[w.worker_id], r_max_round[w.worker_id] = min(s_rewards), max(s_rewards)
-            cum_alg_r[w.worker_id] += sum(s_rewards) / len(s_rewards)
+            cum_alg_r[w.worker_id] += _mean_selected_reward(s_rewards)
 
         w.num_selected_byz.append(len([i for i in sel_ids if i >= cfg.nb_honests]))
         w.observe_neighbors(sel_ids, n_weights)
@@ -451,147 +456,89 @@ def _step_dynamic(
         )
 
 
-def _step_fixed(cfg, workers, byz_by_id, dec_byz, honest_weights, tracker, adj_honest):
-    for w in workers:
-        neighbors = [*list(w.comm_graph.neighbors(w.worker_id)), w.worker_id]
-        h_nids, b_nids = [i for i in neighbors if i < cfg.nb_honests], [
-            i for i in neighbors if i >= cfg.nb_honests
-        ]
-        w.num_selected_byz.append(len(b_nids))
-        h_weights = [honest_weights[i] for i in h_nids]
-        if cfg.adversary.attack == "dissensus":
-            b_weights = [
-                dec_byz[i].pull(
-                    {
-                        "target": w.worker_id,
-                        "honest_neighbors": h_nids,
-                        "pivot_params": w.pull(None),
-                        "honest_local_params": h_weights,
-                    }
-                )
-                for i in b_nids
-            ]
-        else:
-            b_weights = [
-                byz_by_id[i].pull({"honest_weights": honest_weights, "step": w._current_step})
-                for i in b_nids
-            ]
-        w.aggregate(h_weights + b_weights)
-    with torch.no_grad():
-        updated = [w.pull(None) for w in workers]
-        tracker.record_drift(
-            neighbor_disagreement(updated, adjacency=adj_honest), consensus_drift(updated)
-        )
-
-
-def _run_experiment(
-    cfg: BanditDLConfig, result_dir: pathlib.Path, seed: int, device: str, mode: str
+def run_experiment(
+    cfg: BanditDLConfig,
+    result_dir: pathlib.Path,
+    seed: int,
+    device: str,
 ) -> None:
     _setup_seed(seed)
-    _log_start(mode, cfg, result_dir)
-    train_dict, local_test_dict, test_loader, dist_stats = dataset.make_train_validation_test_datasets(
-        cfg.dataset.dataset,
-        heterogeneity=cfg.heterogeneity.method == "legacy",
-        numb_labels=cfg.dataset.numb_labels,
-        alpha_dirichlet=cfg.heterogeneity.alpha,
-        distinct_datasets=cfg.dataset.mode == "writer_per_node",
-        honest_workers=cfg.nb_honests,
-        train_batch=cfg.optimization.batch_size,
-        test_batch=100,
-        global_test_ratio=cfg.evaluation.global_test_ratio,
-        local_test_ratio=cfg.evaluation.local_test_ratio,
-        split_seed=cfg.evaluation.split_seed,
-        partition_method=cfg.heterogeneity.method,
-        clusters=cfg.heterogeneity.clusters,
-        classes_per_group=cfg.heterogeneity.classes_per_group,
-        group_overlap=cfg.heterogeneity.group_overlap,
-        dataset_mode=cfg.dataset.mode,
-        nb_writers_limit=cfg.dataset.nb_writers_limit,
+    _log_start(cfg, result_dir)
+    train_dict, local_test_dict, test_loader, dist_stats = (
+        dataset.make_train_validation_test_datasets(
+            cfg.dataset.dataset,
+            numb_labels=cfg.dataset.numb_labels,
+            alpha_dirichlet=cfg.heterogeneity.alpha,
+            honest_workers=cfg.nb_honests,
+            train_batch=cfg.optimization.batch_size,
+            test_batch=100,
+            global_test_ratio=cfg.evaluation.global_test_ratio,
+            local_test_ratio=cfg.evaluation.local_test_ratio,
+            split_seed=cfg.evaluation.split_seed,
+            partition_method=cfg.heterogeneity.method,
+            clusters=cfg.heterogeneity.clusters,
+            classes_per_group=cfg.heterogeneity.classes_per_group,
+            group_overlap=cfg.heterogeneity.group_overlap,
+            gamma_similarity=cfg.heterogeneity.gamma_similarity,
+            dataset_mode=cfg.dataset.mode,
+            nb_writers_limit=cfg.dataset.nb_writers_limit,
+        )
     )
 
-    graph, adj_honest = None, None
-    if mode == "fixed":
-        nb_edges = cfg.topology.nodes * cfg.topology.degree // 2
-        g = generate_connected_graph(cfg.topology.nodes, nb_edges, seed=seed)
-        graph = CommunicationNetwork(
-            g, weights_method="metropolis", device=device if device != "auto" else "cpu"
-        )
-        adj_honest = torch.as_tensor(
-            np.asarray(graph.adjacency_matrix[: cfg.nb_honests, : cfg.nb_honests]),
-            dtype=torch.float32,
-            device=device,
-        )
-
-    workers = _init_workers(
-        cfg, train_dict, local_test_dict, device, graph, cfg.adversary.attack == "dissensus"
-    )
-    bw_cfg = (
-        replace(_build_worker_config(cfg, device), comm_graph=graph)
-        if mode == "fixed"
-        else _build_worker_config(cfg, device)
-    )
+    workers = _init_workers(cfg, train_dict, local_test_dict, device)
+    bw_cfg = _build_worker_config(cfg, device)
     byz_workers = [
         ByzantineWorker(i, workers[0].model_size, bw_cfg)
-        for i in range(cfg.nb_honests, cfg.total_nodes)
+        for i in range(cfg.nb_honests, cfg.topology.nodes)
     ]
     byz_by_id = {byz.worker_id: byz for byz in byz_workers}
-    dec_byz = (
-        {
-            i: DecByzantineWorker(i, cfg.nb_honests, bw_cfg)
-            for i in range(cfg.nb_honests, cfg.total_nodes)
-        }
-        if mode == "fixed"
-        else {}
-    )
 
     with ResultTracker(cfg, result_dir, test_loader) as tracker:
         tracker.save_audit(
             {
+                "partition": {
+                    "method": cfg.heterogeneity.method,
+                    "seed": cfg.evaluation.split_seed,
+                    "requested_clusters": cfg.heterogeneity.clusters,
+                    "resolved_clusters": cfg.resolved_clusters,
+                    "alpha": cfg.heterogeneity.alpha,
+                    "classes_per_group": cfg.heterogeneity.classes_per_group,
+                    "group_overlap": cfg.heterogeneity.group_overlap,
+                    "gamma_similarity": cfg.heterogeneity.gamma_similarity,
+                },
                 "distribution": dist_stats,
-                "topology": {
-                    "mode": mode,
-                    "nodes": cfg.topology.nodes,
-                    "honests": cfg.nb_honests,
-                    "byzantines": cfg.adversary.byzcount,
+                "participants": {
+                    "total": cfg.topology.nodes,
+                    "honest": cfg.nb_honests,
+                    "byzantine": cfg.adversary.byzcount,
                 },
             }
         )
         cum_arm_r, cum_alg_r = (
-            np.zeros((cfg.nb_honests, cfg.total_nodes)),
+            np.zeros((cfg.nb_honests, cfg.topology.nodes)),
             np.zeros(cfg.nb_honests),
         )
 
         for step in range(cfg.effective_rounds + 1):
-            tracker.evaluate_step(step, workers, mode)
+            tracker.evaluate_step(step, workers, "dynamic")
             if step < cfg.effective_rounds:
                 for w in workers:
                     w.train()
                 tracker.record_gradient_norms(workers)
                 tracker.record_probabilities(step, workers)
                 h_weights = [w.pull(None) for w in workers]
-                if mode == "dynamic":
-                    _step_dynamic(
-                        step,
-                        cfg,
-                        workers,
-                        byz_workers,
-                        byz_by_id,
-                        h_weights,
-                        cum_arm_r,
-                        cum_alg_r,
-                        tracker,
-                    )
-                else:
-                    _step_fixed(cfg, workers, byz_by_id, dec_byz, h_weights, tracker, adj_honest)
-                _raise_if_nonfinite_weights(workers, step, mode)
+                _step_dynamic(
+                    step,
+                    cfg,
+                    workers,
+                    byz_workers,
+                    byz_by_id,
+                    h_weights,
+                    cum_arm_r,
+                    cum_alg_r,
+                    tracker,
+                )
+                _raise_if_nonfinite_weights(workers, step)
                 if step % 10 == 0:
                     tracker.save_snapshot()
-        tracker.finalize(workers, mode)
-
-
-def run_dynamic(cfg: BanditDLConfig, result_dir: pathlib.Path, seed: int, device: str) -> None:
-    _run_experiment(cfg, result_dir, seed, device, "dynamic")
-
-
-def run_fixed(cfg: BanditDLConfig, result_dir: pathlib.Path, seed: int, device: str) -> None:
-    _run_experiment(cfg, result_dir, seed, device, "fixed")
+        tracker.finalize(workers)

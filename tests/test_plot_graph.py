@@ -4,6 +4,7 @@ These exercise the pure edge-matrix logic (directed vs. undirected handling,
 threshold and top-k filtering) plus one end-to-end render, without asserting on
 pixels.
 """
+
 from __future__ import annotations
 
 import matplotlib
@@ -98,6 +99,18 @@ def test_load_weights_sampler_probability_uses_last_probability_round(tmp_path):
 
     assert directed is True
     np.testing.assert_allclose(weights, probabilities[-1])
+
+
+def test_load_weights_ignores_unwritten_probability_rounds(tmp_path):
+    results = tmp_path / "results"
+    results.mkdir()
+    probabilities = np.full((3, 2, 2), np.nan)
+    probabilities[0] = [[0.0, 1.0], [1.0, 0.0]]
+    np.save(results / "sampler_probabilities.npy", probabilities)
+
+    weights, _ = _load_weights(results, "sampler_probability", n_honest=2)
+
+    np.testing.assert_allclose(weights, probabilities[0])
 
 
 def test_load_weights_sampler_probability_averages_seed_probabilities(tmp_path):

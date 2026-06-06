@@ -6,7 +6,7 @@ selections concentrate inside its own label group.
 
 Usage:
     uv run python scripts/analyze_clustering.py <run_dir> [<run_dir> ...] \
-        --partition grouped_5x2 --tail 200
+        --partition pathological_5g_2c --tail 200
 
 Outputs a per-run summary table:
     sampling, seed, mean_purity, min_purity, max_purity
@@ -24,11 +24,10 @@ import pathlib
 import numpy as np
 from omegaconf import OmegaConf
 
-
 PARTITIONS = {
-    "grouped_5x2": dict(nb_groups=5, classes_per_group=2, overlap=0),
-    "grouped_2x5": dict(nb_groups=2, classes_per_group=5, overlap=0),
-    "grouped_3x3_ov1": dict(nb_groups=3, classes_per_group=3, overlap=1),
+    "pathological_5g_2c": dict(nb_groups=5, classes_per_group=2, overlap=0),
+    "pathological_2g_5c": dict(nb_groups=2, classes_per_group=5, overlap=0),
+    "pathological_3g_3c_ov1": dict(nb_groups=3, classes_per_group=3, overlap=1),
 }
 
 
@@ -48,7 +47,10 @@ def worker_to_group(nb_workers: int, nb_groups: int) -> np.ndarray:
 def cluster_purity(selected: np.ndarray, worker_group: np.ndarray, tail: int) -> np.ndarray:
     if selected.ndim == 4:
         per_seed = np.stack(
-            [_cluster_purity_one_seed(seed_selected, worker_group, tail) for seed_selected in selected]
+            [
+                _cluster_purity_one_seed(seed_selected, worker_group, tail)
+                for seed_selected in selected
+            ]
         )
         return np.nanmean(per_seed, axis=0)
     if selected.ndim != 3:
@@ -56,7 +58,9 @@ def cluster_purity(selected: np.ndarray, worker_group: np.ndarray, tail: int) ->
     return _cluster_purity_one_seed(selected, worker_group, tail)
 
 
-def _cluster_purity_one_seed(selected: np.ndarray, worker_group: np.ndarray, tail: int) -> np.ndarray:
+def _cluster_purity_one_seed(
+    selected: np.ndarray, worker_group: np.ndarray, tail: int
+) -> np.ndarray:
     # selected: (T, N, k) ints; -1 = no pick.
     selected_tail = selected[-tail:]
     purities = np.full(selected_tail.shape[1], np.nan)
@@ -95,7 +99,9 @@ def parse_run(run_dir: pathlib.Path, partition: str, tail: int):
     seed = int(cfg.seed)
     nb_workers = int(cfg.topology.nodes)
     by_seed_path = run_dir / "results" / "selected_neighbors_by_seed.npy"
-    selected_path = by_seed_path if by_seed_path.is_file() else run_dir / "results" / "selected_neighbors.npy"
+    selected_path = (
+        by_seed_path if by_seed_path.is_file() else run_dir / "results" / "selected_neighbors.npy"
+    )
     if not selected_path.is_file():
         print(f"[skip] {run_dir}: missing {selected_path}")
         return None
@@ -117,11 +123,15 @@ def parse_run(run_dir: pathlib.Path, partition: str, tail: int):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("run_dirs", nargs="+", type=pathlib.Path)
-    parser.add_argument("--partition", default="grouped_5x2", choices=sorted(PARTITIONS))
+    parser.add_argument("--partition", default="pathological_5g_2c", choices=sorted(PARTITIONS))
     parser.add_argument("--tail", type=int, default=200, help="rounds at the end to average over")
-    parser.add_argument("--json", type=pathlib.Path, default=None, help="optional path to dump full results as JSON")
+    parser.add_argument(
+        "--json", type=pathlib.Path, default=None, help="optional path to dump full results as JSON"
+    )
     args = parser.parse_args()
 
     rows = []

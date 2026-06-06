@@ -21,16 +21,12 @@ class DynamicWorker(HonestWorker):
             config,
         )
         self.sampling_ratio = config.sampling_ratio
-        self.nb_neighbors = (
-            max(
-                1,
-                min(
-                    self.nb_honest + self.nb_byz - 1,
-                    round((self.nb_honest + self.nb_byz - 1) * config.sampling_ratio),
-                ),
-            )
-            if config.sampling_ratio is not None
-            else config.nb_neighbors
+        self.nb_neighbors = max(
+            1,
+            min(
+                self.nb_honest + self.nb_byz - 1,
+                round((self.nb_honest + self.nb_byz - 1) * config.sampling_ratio),
+            ),
         )
         self.neighbor_sampler = config.neighbor_sampler or make_neighbor_sampler("uniform")
         self.reward_strategy = config.reward_strategy or make_reward_strategy(

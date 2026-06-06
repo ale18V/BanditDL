@@ -38,7 +38,7 @@ case "$SWEEP" in
   cifar_dirichlet)
     NODES=30
     ROUNDS=500
-    for alpha in alpha0.5 alpha1 alpha10.0; do
+    for alpha in dirichlet_alpha0.5 dirichlet_alpha1 dirichlet_alpha10; do
       for sampler in "${SAMPLERS[@]}"; do
         for sampling in "${SAMPLINGS[@]}"; do
           for seed in "${SEEDS[@]}"; do
@@ -54,7 +54,7 @@ case "$SWEEP" in
   femnist_pool_dirichlet)
     NODES=30
     ROUNDS=300
-    for alpha in alpha0.5 alpha1 alpha10.0; do
+    for alpha in dirichlet_alpha0.5 dirichlet_alpha1 dirichlet_alpha10; do
       for sampler in "${SAMPLERS[@]}"; do
         for sampling in "${SAMPLINGS[@]}"; do
           for seed in "${SEEDS[@]}"; do
@@ -70,7 +70,7 @@ case "$SWEEP" in
   cifar_grouped)
     NODES=30
     ROUNDS=500
-    for group in grouped_5x2 grouped_2x5; do
+    for group in pathological_5g_2c pathological_2g_5c; do
       for sampler in "${SAMPLERS[@]}"; do
         for sampling in "${SAMPLINGS[@]}"; do
           for seed in "${SEEDS[@]}"; do
@@ -86,7 +86,7 @@ case "$SWEEP" in
   femnist_pool_grouped)
     NODES=30
     ROUNDS=300
-    for group in grouped_5x2 grouped_2x5; do
+    for group in pathological_5g_2c pathological_2g_5c; do
       for sampler in "${SAMPLERS[@]}"; do
         for sampling in "${SAMPLINGS[@]}"; do
           for seed in "${SEEDS[@]}"; do
@@ -115,7 +115,7 @@ case "$SWEEP" in
     ;;
   cifar_grouped_clustering)
     # Cluster-formation study on CIFAR-10: 30 nodes, disjoint label groups
-    # (grouped_5x2 -> 5 clusters of 6 nodes, 2 labels each), bandit sampler,
+    # (pathological_5g_2c -> 5 clusters of 6 nodes, 2 labels each), bandit sampler,
     # no adversaries. Sweeps topology.sampling x seed. Evaluates every 20 rounds.
     # Uses opt_cifar10 (CrossEntropyLoss + lr decay) to match cnn_cifar's logits
     # output -- the default opt_mnist (NLLLoss) diverges to NaN here.
@@ -127,16 +127,16 @@ case "$SWEEP" in
       for seed in "${LOCAL_SEEDS[@]}"; do
         name="cifargrp_bandit_s${sampling}_seed${seed}"
         submit_one "$name" \
-          "dataset=cifar10 optimization=opt_cifar10 sampler=bandit heterogeneity=grouped_5x2 adversary=none topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS evaluation.evaluation_delta=20 seed=$seed"
+          "dataset=cifar10 optimization=opt_cifar10 sampler=bandit heterogeneity=pathological_5g_2c adversary=none topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS evaluation.evaluation_delta=20 seed=$seed"
         count=$((count + 1))
       done
     done
     ;;
   cifar_grouped_2x5_clustering)
     # Cluster-formation study on CIFAR-10 with coarser clusters:
-    # grouped_2x5 -> 2 disjoint clusters of 15 nodes, 5 labels each, no overlap.
+    # pathological_2g_5c -> 2 disjoint clusters of 15 nodes, 5 labels each, no overlap.
     # Same grid (5 samplings x 3 seeds) as cifar_grouped_clustering for direct
-    # comparison against grouped_5x2. Uses opt_cifar10 (CrossEntropy + lr decay).
+    # comparison against pathological_5g_2c. Uses opt_cifar10 (CrossEntropy + lr decay).
     NODES=30
     ROUNDS=500
     LOCAL_SAMPLINGS=(0.05 0.1 0.2 0.3 0.5)
@@ -145,14 +145,14 @@ case "$SWEEP" in
       for seed in "${LOCAL_SEEDS[@]}"; do
         name="cifar2x5_bandit_s${sampling}_seed${seed}"
         submit_one "$name" \
-          "dataset=cifar10 optimization=opt_cifar10 sampler=bandit heterogeneity=grouped_2x5 adversary=none topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS evaluation.evaluation_delta=20 seed=$seed"
+          "dataset=cifar10 optimization=opt_cifar10 sampler=bandit heterogeneity=pathological_2g_5c adversary=none topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS evaluation.evaluation_delta=20 seed=$seed"
         count=$((count + 1))
       done
     done
     ;;
   femnist_pool_clustering)
     # Cluster-formation study on FEMNIST (pool mode): 30 nodes, disjoint label
-    # groups via grouped_5x2 -> 5 clusters of 6 nodes, 2 labels each.
+    # groups via pathological_5g_2c -> 5 clusters of 6 nodes, 2 labels each.
     # Sweeps topology.sampling x seed with the bandit sampler, no adversaries.
     # Mirrors cifar_grouped_clustering's grid for direct comparison.
     NODES=30
@@ -163,13 +163,13 @@ case "$SWEEP" in
       for seed in "${LOCAL_SEEDS[@]}"; do
         name="fmpoolgrp_bandit_s${sampling}_seed${seed}"
         submit_one "$name" \
-          "dataset=femnist dataset.mode=pool optimization=opt_femnist sampler=bandit heterogeneity=grouped_5x2 adversary=none topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS evaluation.evaluation_delta=20 seed=$seed"
+          "dataset=femnist dataset.mode=pool optimization=opt_femnist sampler=bandit heterogeneity=pathological_5g_2c adversary=none topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS evaluation.evaluation_delta=20 seed=$seed"
         count=$((count + 1))
       done
     done
     ;;
   mnist_grouped_clustering)
-    # Cluster-formation study: 30 MNIST nodes, disjoint label groups (grouped_5x2 ->
+    # Cluster-formation study: 30 MNIST nodes, disjoint label groups (pathological_5g_2c ->
     # 5 clusters of 6 nodes, 2 labels each), bandit sampler, no adversaries.
     # Sweeps topology.sampling x seed. Logs/evaluates every 10 rounds.
     NODES=30
@@ -180,7 +180,7 @@ case "$SWEEP" in
       for seed in "${LOCAL_SEEDS[@]}"; do
         name="mnistgrp_bandit_s${sampling}_seed${seed}"
         submit_one "$name" \
-          "dataset=mnist sampler=bandit heterogeneity=grouped_5x2 adversary=none topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS evaluation.evaluation_delta=20 seed=$seed"
+          "dataset=mnist sampler=bandit heterogeneity=pathological_5g_2c adversary=none topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS evaluation.evaluation_delta=20 seed=$seed"
         count=$((count + 1))
       done
     done

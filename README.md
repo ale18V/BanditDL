@@ -162,7 +162,6 @@ Dataset:
 
 Topology:
 - `dynamic`
-- `fixed_cs`
 
 Sampler:
 - `uniform`
@@ -210,7 +209,10 @@ Dataset configs are in `conf/dataset/`.
 Heterogeneity configs are in `conf/heterogeneity/`.
 
 - `alpha`: Dirichlet data heterogeneity parameter passed as `dirichlet-alpha`.
-- `numb_labels`: number of dataset labels.
+- `clusters`: number of data-distribution clusters. `null` means one cluster per honest node.
+- `classes_per_group`: labels assigned to each pathological cluster.
+- `group_overlap`: overlap between consecutive pathological clusters.
+- `gamma_similarity`: interpolation toward IID data in `[0, 1]`.
 
 ### Optimization Config
 
@@ -231,9 +233,7 @@ Optimization configs are in `conf/optimization/`.
 Topology configs are in `conf/topology/`.
 
 - `nodes`: total simulated participants, including Byzantine participants.
-- `sampling`: dynamic sampling ratio. Dynamic topologies define `sampling`.
-- `degree`: fixed-graph degree target. Fixed topologies define `degree`.
-- `method`: fixed-graph method, for example `cs+`.
+- `sampling`: fraction of other participants sampled each round.
 
 ### Sampler Config
 
@@ -257,7 +257,7 @@ Adversary configs are in `conf/adversary/`.
 
 Aggregator configs are in `conf/aggregator/`.
 
-- `pre-aggregator`: optional first-stage robust aggregation rule, commonly `nnm`.
+- `pre_aggregator`: optional first-stage robust aggregation rule, commonly `nnm`.
 - `aggregator`: robust aggregator, commonly `average` or `trmean`.
 - `rag`: robust aggregation flag. Dynamic runs force this to `true`.
 
@@ -398,12 +398,8 @@ hydra.sweeper.params + CLI overrides]
 
     F --> H[config_adapter builds one engine config]
     G --> H
-    H --> X[hydra_run dispatches training engine]
-
-    X --> I1[Training engine
-experiments.engine::run_dynamic]
-    X --> I2[Training engine
-    experiments.engine::run_fixed]
+    H --> I1[Training engine
+    experiments.engine::run_experiment]
 
     I1 --> J1[data.*
     models + dataset loaders]
@@ -412,16 +408,8 @@ experiments.engine::run_dynamic]
     K1 --> L1[core.robustness.*
     attacks + aggregators]
 
-    I2 --> J2[data.*
-    models + dataset loaders]
-    I2 --> K2[core.worker.fixed
-    fixed-graph updates]
-    K2 --> L2[core.robustness.*
-    attacks + summations]
-
     I1 --> M[Per-run result directory
-    validation, validation_worst, logs]
-    I2 --> M
+    metrics + audit metadata]
 ```
 
 ### End-to-end Flow
@@ -430,7 +418,7 @@ experiments.engine::run_dynamic]
 2. `banditdl.__main__` dispatches to `banditdl.experiments.hydra_run`.
 3. Hydra composes config from `conf/`.
 4. In multirun mode, Hydra generates one run per parameter combination.
-5. For each run, `hydra_run` dispatches the corresponding training engine function.
+5. For each run, `hydra_run` invokes the training engine.
 6. Training engine (`experiments.engine`) executes and writes results.
 
 ### Responsibilities By Module
@@ -440,18 +428,18 @@ experiments.engine::run_dynamic]
   - Dispatches one composed run to the engine.
 
 - `banditdl.experiments.config_adapter`
-  - Converts composed Hydra config into legacy engine args.
-  - Computes dynamic/fixed run mode, neighbor count, device, and run name.
+  - Validates the composed Hydra config.
+  - Computes sampled-neighbor count and run name.
 
 - `banditdl.experiments.engine`
-  - Per-run execution logic for dynamic/fixed paths.
+  - Dynamic decentralized-learning execution logic.
   - Drives training/evaluation loops and persistence.
 
 - `banditdl.core.worker.*`
   - Worker logic for local updates and communication.
 
 - `banditdl.core.robustness.*`
-  - Byzantine attacks and robust aggregation/summation rules.
+  - Byzantine attacks and robust aggregation rules.
 
 - `banditdl.data.*`
   - Dataset loading/partitioning and model construction.
@@ -468,7 +456,7 @@ In this repository, a **worker** is one decentralized learning participant (node
 - communicates with neighbors,
 - applies robust aggregation logic under Byzantine settings.
 
-Honest participants are modeled as `DynamicWorker`/`FixedGraphWorker`; Byzantine participants are modeled as explicit attack-only nodes.
+Honest participants are modeled as `DynamicWorker`; Byzantine participants are explicit attack-only nodes.
 
 ### Decentralized Structure Diagram
 
@@ -555,6 +543,11 @@ Dynamic runs also save hindsight diagnostics for every sampler, including unifor
 - `oracle_neighbors.npy`: best fixed hindsight neighbors per round and worker.
 - `sampler_probabilities.npy`: per-round sampler probabilities with shape `(rounds, honest_workers, total_nodes)`.
 - KL-to-uniform, minimum probability, and maximum probability curves are derived from `sampler_probabilities.npy` when plotting.
+- `audit.json`: partition parameters, participant counts, and each honest node's sample/label distribution.
+
+Metric arrays are checkpointed every ten rounds and at shutdown. Sampler
+probabilities are written round-by-round; unfinished trailing rounds remain
+`NaN` and are ignored by loaders and plots.
 
 The automatic plot `plots/sampler_aggressiveness.png` shows:
 - KL divergence to uniform aggregated across nodes by average, median, min, and max.

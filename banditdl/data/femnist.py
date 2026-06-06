@@ -105,6 +105,7 @@ def _full_pool_split(hf) -> HFDataset:
     train_split = _resolve_split(hf, "train")
     if "test" in hf:
         from datasets import concatenate_datasets
+
         return concatenate_datasets([train_split, hf["test"]])
     return train_split
 
@@ -133,7 +134,10 @@ def _split_writers_for_global_test(
 
 
 def _select_writers(
-    writers_to_indices: dict[str, list[int]], nb_writers: int, seed: int, writers_cap: int | None = None
+    writers_to_indices: dict[str, list[int]],
+    nb_writers: int,
+    seed: int,
+    writers_cap: int | None = None,
 ) -> list[str]:
     """Pick `nb_writers` writer IDs deterministically from seed; capped by writers_cap if given."""
     pool = sorted(writers_to_indices.keys())
@@ -179,7 +183,8 @@ def load_femnist_writer_loaders(
     local_test_ratio: float = 0.2,
     split_seed: int = 0,
     writers_cap: int | None = None,
-) -> tuple[dict[int, DataLoader], dict[int, DataLoader], DataLoader]:
+    return_stats: bool = False,
+):
     """Per-writer training + per-writer local test loaders + shared global test loader.
 
     1. Hold out `global_test_ratio` of writers as the global test pool.
@@ -187,7 +192,7 @@ def load_femnist_writer_loaders(
     3. Split each trainer's samples uniformly into local train / local test by
        `local_test_ratio`.
 
-    Returns: `(train_loaders, local_test_loaders, global_test_loader)`.
+    Returns the three loaders, plus partition statistics when `return_stats=True`.
     """
     hf = _load_hf_dataset()
     pooled_split = _full_pool_split(hf)
@@ -202,11 +207,20 @@ def load_femnist_writer_loaders(
 
     train_loaders: dict[int, DataLoader] = {}
     local_test_loaders: dict[int, DataLoader] = {}
+    distribution_stats = {}
     for worker_id, writer in enumerate(selected):
-        rng = np.random.default_rng(split_seed + 1 + worker_id)
-        train_idx, local_test_idx = _uniform_local_split(
-            train_writer_groups[writer], local_test_ratio, rng
+        writer_indices = train_writer_groups[writer]
+        labels, counts = np.unique(
+            pooled_wrapped.targets[writer_indices].numpy(),
+            return_counts=True,
         )
+        distribution_stats[worker_id] = {
+            "writer": writer,
+            "total": len(writer_indices),
+            "labels": {int(label): int(count) for label, count in zip(labels, counts, strict=True)},
+        }
+        rng = np.random.default_rng(split_seed + 1 + worker_id)
+        train_idx, local_test_idx = _uniform_local_split(writer_indices, local_test_ratio, rng)
         train_loaders[worker_id] = _make_loader(
             Subset(pooled_wrapped, train_idx), batch_size=train_batch, shuffle=True
         )
@@ -217,7 +231,8 @@ def load_femnist_writer_loaders(
     global_test_loader = _make_loader(
         Subset(pooled_wrapped, global_test_indices), batch_size=test_batch, shuffle=False
     )
-    return train_loaders, local_test_loaders, global_test_loader
+    loaders = train_loaders, local_test_loaders, global_test_loader
+    return (*loaders, distribution_stats) if return_stats else loaders
 
 
 def build_femnist_pool_dataset() -> Dataset:

@@ -46,12 +46,8 @@ class AggregatorConfig:
 
 @dataclass
 class TopologyConfig:
-    nodes: int = 10 
-    degree: int = 3
-    sampling: float | None = None
-    neighbor_sampler: str = "uniform"
-    bandit_reward: str = "parameter_distance"
-    method: str | None = None
+    nodes: int = 10
+    sampling: float = 0.2
 
 
 @dataclass
@@ -67,7 +63,7 @@ class EvaluationConfig:
 class HeterogeneityConfig:
     method: str = "dirichlet"
     clusters: int | None = None  # Number of clusters. Defaults to topology.nodes.
-    
+
     alpha: float | None = None
     classes_per_group: int | None = None
     group_overlap: int = 0
@@ -83,7 +79,7 @@ class BanditDLConfig:
     topology: TopologyConfig = field(default_factory=TopologyConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     heterogeneity: HeterogeneityConfig = field(default_factory=HeterogeneityConfig)
-    
+
     seed: int = 42
     num_seeds: int = 1
     device: str = "auto"
@@ -91,17 +87,19 @@ class BanditDLConfig:
 
     @property
     def resolved_sampler_name(self) -> str:
-        if self.sampler and "name" in self.sampler:
-            return str(self.sampler["name"])
-        return self.topology.neighbor_sampler
+        return str(self.sampler.get("name", "uniform"))
+
+    @property
+    def resolved_reward_name(self) -> str:
+        return str(self.sampler.get("reward", "parameter_distance"))
 
     @property
     def nb_honests(self) -> int:
-        return self.topology.nodes
+        return self.topology.nodes - self.adversary.byzcount
 
     @property
-    def total_nodes(self) -> int:
-        return self.nb_honests + self.adversary.byzcount
+    def resolved_clusters(self) -> int:
+        return self.heterogeneity.clusters or self.nb_honests
 
     @property
     def effective_rounds(self) -> int:

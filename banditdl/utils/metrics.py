@@ -161,6 +161,21 @@ def sampler_probability_summary(metric: MetricKey, probabilities: np.ndarray) ->
     raise ValueError(f"{metric.value} is not a sampler probability summary")
 
 
+def trim_unwritten_probability_rounds(probabilities: np.ndarray) -> np.ndarray:
+    probabilities = np.asarray(probabilities)
+    time_axis = 1 if probabilities.ndim == 4 else 0
+    other_axes = tuple(axis for axis in range(probabilities.ndim) if axis != time_axis)
+    completed = ~np.all(np.isnan(probabilities), axis=other_axes)
+    completed_indices = np.flatnonzero(completed)
+    if completed_indices.size == 0:
+        return np.take(probabilities, [], axis=time_axis)
+    return np.take(
+        probabilities,
+        np.arange(completed_indices[-1] + 1),
+        axis=time_axis,
+    )
+
+
 def read_eval(path: Path) -> tuple[np.ndarray, np.ndarray]:
     steps: list[float] = []
     values: list[float] = []
@@ -186,6 +201,7 @@ def read_eval(path: Path) -> tuple[np.ndarray, np.ndarray]:
             values.append(value)
     if skipped:
         import warnings
+
         warnings.warn(
             f"{path}: skipped {skipped} malformed line(s); the file may be from a "
             "collided run-dir (check hydra.run.dir uniqueness).",
@@ -241,7 +257,9 @@ class MetricLoader:
             return self._load_text(key).values
         if key in SAMPLER_PROBABILITY_DERIVED:
             try:
-                return sampler_probability_summary(key, self.load_values(MetricKey.SAMPLER_PROBABILITIES))
+                return sampler_probability_summary(
+                    key, self.load_values(MetricKey.SAMPLER_PROBABILITIES)
+                )
             except FileNotFoundError:
                 pass
 
@@ -251,6 +269,8 @@ class MetricLoader:
                     values = np.load(path)
                     if values.size == 0:
                         raise ValueError(f"{path} is empty")
+                    if key == MetricKey.SAMPLER_PROBABILITIES:
+                        values = trim_unwritten_probability_rounds(values)
                     return values
         raise FileNotFoundError(self.run_dir / f"{key.value}.npy")
 
@@ -270,7 +290,9 @@ class MetricLoader:
             return self._load_seed_text(key)
         if key in SAMPLER_PROBABILITY_DERIVED:
             try:
-                return sampler_probability_summary(key, self.load_seed_values(MetricKey.SAMPLER_PROBABILITIES))
+                return sampler_probability_summary(
+                    key, self.load_seed_values(MetricKey.SAMPLER_PROBABILITIES)
+                )
             except FileNotFoundError:
                 pass
 
@@ -280,11 +302,15 @@ class MetricLoader:
                 values = np.load(by_seed_path)
                 if values.size == 0:
                     raise ValueError(f"{by_seed_path} is empty")
+                if key == MetricKey.SAMPLER_PROBABILITIES:
+                    values = trim_unwritten_probability_rounds(values)
                 return values
             if path.exists():
                 values = np.load(path)
                 if values.size == 0:
                     raise ValueError(f"{path} is empty")
+                if key == MetricKey.SAMPLER_PROBABILITIES:
+                    values = trim_unwritten_probability_rounds(values)
                 return values[np.newaxis, ...]
         raise FileNotFoundError(self.run_dir / f"{key.value}.npy")
 
@@ -300,10 +326,10 @@ class MetricLoader:
         ):
             path = self.run_dir / f"{key.value}.npy"
             if path.exists():
-                return np.arange(np.load(path).shape[0])
+                return np.arange(self.load_values(key).shape[0])
             by_seed_path = self.run_dir / f"{key.value}_by_seed.npy"
             if by_seed_path.exists():
-                return np.arange(np.load(by_seed_path).shape[1])
+                return np.arange(self.load_seed_values(key).shape[1])
         validation = self._load_text(MetricKey.VALIDATION)
         return np.arange(int(np.max(validation.x)) + 1)
 

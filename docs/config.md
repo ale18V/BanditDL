@@ -65,13 +65,11 @@ Group: `conf/dataset/`
 Group: `conf/topology/`
 
 - `topology=dynamic`: dynamic neighbor sampling
-- `topology=fixed_cs`: fixed graph
 
 Important fields:
 
 - `topology.nodes`: total workers
-- `topology.sampling`: sampling ratio for dynamic runs
-- `topology.degree`: degree for fixed-graph runs
+- `topology.sampling`: fraction of other participants sampled each round
 
 ### Sampler
 
@@ -108,6 +106,13 @@ Important fields:
 Group: `conf/heterogeneity/`
 
 - `heterogeneity.alpha`: Dirichlet heterogeneity parameter
+- `heterogeneity.clusters`: number of clusters; `null` means one cluster per honest node
+- `heterogeneity.classes_per_group`: labels per pathological cluster
+- `heterogeneity.group_overlap`: overlap between pathological clusters
+- `heterogeneity.gamma_similarity`: interpolation toward IID data in `[0, 1]`
+
+The honest-node count must be divisible by an explicit cluster count. If
+`clusters` is `null`, every honest node is treated as its own cluster.
 
 ### Adversary
 
@@ -123,7 +128,7 @@ For honest-only runs, keep `adversary=none`.
 
 Group: `conf/aggregator/`
 
-- `aggregator.pre-aggregator`
+- `aggregator.pre_aggregator`
 - `aggregator.aggregator`
 - `aggregator.rag`
 

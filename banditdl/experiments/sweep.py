@@ -8,9 +8,8 @@ import optuna
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
-from banditdl.experiments.config_schema import BanditDLConfig
 from banditdl.experiments.config_adapter import build_engine_config, resolve_device
-from banditdl.experiments.engine import run_dynamic, run_fixed
+from banditdl.experiments.engine import run_experiment
 from banditdl.utils.plot_sweep_base import (
     STUDY_NAME,
     _choices_from_spec,
@@ -41,19 +40,20 @@ def _read_metric_file_max(metric_file: Path) -> float:
             if len(fields) >= 2:
                 metric_values.append(float(fields[1]))
             else:
-                print(f"Warning: Malformed line {i+1} in {metric_file} (too few fields)")
+                print(f"Warning: Malformed line {i + 1} in {metric_file} (too few fields)")
         except ValueError:
-            print(f"Warning: Could not parse metric value on line {i+1} in {metric_file}")
+            print(f"Warning: Could not parse metric value on line {i + 1} in {metric_file}")
 
     if not metric_values:
         raise ValueError(f"No valid metric values found in: {metric_file}")
     return max(metric_values)
 
 
-def _read_seed_metric_file_max(result_dir: Path, seeds: list[int], metric_name: str) -> tuple[float, list[float]]:
+def _read_seed_metric_file_max(
+    result_dir: Path, seeds: list[int], metric_name: str
+) -> tuple[float, list[float]]:
     seed_values = [
-        _read_metric_file_max(seed_result_dir(result_dir, seed) / metric_name)
-        for seed in seeds
+        _read_metric_file_max(seed_result_dir(result_dir, seed) / metric_name) for seed in seeds
     ]
     return float(np.mean(seed_values)), seed_values
 
@@ -89,22 +89,17 @@ def _objective_from_params(
     trial_cfg = _copy_dict_config(base_cfg)
     _apply_trial_params(trial_cfg, trial_params)
 
-    # Convert to structured config
-    merged = OmegaConf.merge(OmegaConf.structured(BanditDLConfig), trial_cfg)
-    OmegaConf.resolve(merged)
-    config: BanditDLConfig = OmegaConf.to_object(merged)
+    config = build_engine_config(trial_cfg).config
 
     trials_root = output_root / "trials"
     folder_name = trial_folder_name(trial_params, axis_lookup)
     trial_result_dir = trials_root / folder_name / "results"
     trial_result_dir.mkdir(parents=True, exist_ok=True)
 
-    run_cfg = build_engine_config(merged)
     device = resolve_device(trial_cfg)
-    run_once = run_dynamic if run_cfg.run_mode == "dynamic" else run_fixed
 
     seeds = run_seed_averaged(
-        run_once=run_once,
+        run_once=run_experiment,
         config=config,
         result_dir=trial_result_dir,
         base_seed=config.seed,
@@ -125,13 +120,15 @@ def _objective_from_params(
     return validation_metric
 
 
-def _objective_grid(trial, base_cfg: DictConfig, output_root: Path, axis_lookup: dict, combos: list) -> float:
+def _objective_grid(
+    trial, base_cfg: DictConfig, output_root: Path, axis_lookup: dict, combos: list
+) -> float:
     trial_index = int(trial.number)
     if trial_index >= len(combos):
-        raise IndexError(
-            f"Trial index {trial_index} out of bounds for {len(combos)} combinations"
-        )
-    return _objective_from_params(trial, base_cfg, output_root, axis_lookup, dict(combos[trial_index]))
+        raise IndexError(f"Trial index {trial_index} out of bounds for {len(combos)} combinations")
+    return _objective_from_params(
+        trial, base_cfg, output_root, axis_lookup, dict(combos[trial_index])
+    )
 
 
 def _all_search_axes_categorical(search_space: dict) -> bool:
@@ -181,7 +178,9 @@ def _suggest_trial_params(trial, base_cfg: DictConfig, search_space: dict) -> di
     return trial_params
 
 
-def _objective_suggested(trial, base_cfg: DictConfig, output_root: Path, axis_lookup: dict, search_space: dict) -> float:
+def _objective_suggested(
+    trial, base_cfg: DictConfig, output_root: Path, axis_lookup: dict, search_space: dict
+) -> float:
     trial_params = _suggest_trial_params(trial, base_cfg, search_space)
     return _objective_from_params(trial, base_cfg, output_root, axis_lookup, trial_params)
 
@@ -191,22 +190,16 @@ def _run_best_trial_test_evaluation(best_trial, base_cfg: DictConfig, output_roo
     best_cfg = _copy_dict_config(base_cfg)
     _apply_trial_params(best_cfg, best_params)
 
-    # Convert to structured config
-    merged = OmegaConf.merge(OmegaConf.structured(BanditDLConfig), best_cfg)
-    # Enable evaluate_test specifically for this evaluation
-    merged.evaluation.evaluate_test = True
-    OmegaConf.resolve(merged)
-    config: BanditDLConfig = OmegaConf.to_object(merged)
+    OmegaConf.update(best_cfg, "evaluation.evaluate_test", True, merge=False)
+    config = build_engine_config(best_cfg).config
 
     best_result_dir = output_root / "best_trial_test_eval" / "results"
     best_result_dir.mkdir(parents=True, exist_ok=True)
 
-    run_cfg = build_engine_config(merged)
     device = resolve_device(best_cfg)
-    run_once = run_dynamic if run_cfg.run_mode == "dynamic" else run_fixed
 
     seeds = run_seed_averaged(
-        run_once=run_once,
+        run_once=run_experiment,
         config=config,
         result_dir=best_result_dir,
         base_seed=config.seed,
@@ -282,7 +275,10 @@ def main(cfg: DictConfig) -> None:
         print(f"  - {name}: {value}")
 
     final_test_accuracy = _run_best_trial_test_evaluation(best, cfg, output_root)
-    print(f"[optuna] best trial final test directory: {output_root / 'best_trial_test_eval' / 'results'}")
+    final_test_dir = output_root / "best_trial_test_eval" / "results"
+    print(
+        f"[optuna] best trial final test directory: {final_test_dir}"
+    )
     print(f"[optuna] best trial final test_accuracy: {final_test_accuracy:.6f}")
 
     plot_sweep_from_cfg(output_root, cfg, study=study)

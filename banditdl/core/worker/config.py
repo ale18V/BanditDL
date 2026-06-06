@@ -7,6 +7,7 @@ from typing import Any
 @dataclass(frozen=True)
 class WorkerConfig:
     """Configuration for a decentralized worker."""
+
     # Core training params
     model: str
     learning_rate: float
@@ -37,15 +38,8 @@ class WorkerConfig:
     server_clip: bool = False
     bucket_size: int = 1
 
-    # Sampling/Dynamic params (Optional)
-    nb_neighbors: int | None = None
+    # Sampling params
     sampling_ratio: float | None = None
     neighbor_sampler: Any | None = None
     reward_strategy: Any | None = None
     mimic_learning_phase: int | None = None
-
-    # Fixed-graph params (Optional)
-    method: str | None = None
-    comm_graph: Any | None = None
-    dissensus: bool = False
-    epsilon: float = 1.0

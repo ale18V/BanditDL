@@ -4,7 +4,7 @@ defaults:
   - sampler: uniform
   - adversary: none
   - aggregator: mean
-  - heterogeneity: alpha0.5
+  - heterogeneity: dirichlet_alpha0.5
   - optimization: opt_mnist
   - evaluation: evaluation
   - _self_

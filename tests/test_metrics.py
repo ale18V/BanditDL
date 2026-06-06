@@ -1,7 +1,13 @@
-import pytest
 import numpy as np
+import pytest
 
-from banditdl.utils.metrics import MetricKey, MetricLoader, TimeAverage, min_, scalar_reduce_seed_outer
+from banditdl.utils.metrics import (
+    MetricKey,
+    MetricLoader,
+    TimeAverage,
+    min_,
+    scalar_reduce_seed_outer,
+)
 from banditdl.utils.plot_sweep_base import normalize_directions
 
 
@@ -191,3 +197,15 @@ def test_seed_stacked_sampler_probability_summaries_are_derived_on_inner_axes(tm
     values = MetricLoader(tmp_path).load_seed_values(MetricKey.SAMPLER_MAX_PROBABILITY)
 
     np.testing.assert_allclose(values, np.array([[[0.75, 0.5]], [[0.5, 0.9]]]))
+
+
+def test_sampler_probability_loader_trims_unwritten_rounds(tmp_path):
+    probabilities = np.full((4, 2, 3), np.nan)
+    probabilities[0] = [[0.0, 0.5, 0.5], [0.5, 0.0, 0.5]]
+    probabilities[1] = [[0.0, 0.2, 0.8], [0.7, 0.0, 0.3]]
+    np.save(tmp_path / "sampler_probabilities.npy", probabilities)
+
+    loaded = MetricLoader(tmp_path).load_values(MetricKey.SAMPLER_PROBABILITIES)
+
+    assert loaded.shape == (2, 2, 3)
+    np.testing.assert_allclose(loaded, probabilities[:2])

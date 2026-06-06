@@ -33,7 +33,9 @@ def build_pathological_matrix(nb_groups, nb_labels, labels_per_group, overlap):
             mask[g, (start + i) % nb_labels] = 1.0
 
     col_sums = mask.sum(axis=0)
-    col_sums[col_sums == 0] = 1.0
+    uncovered = col_sums == 0
+    mask[:, uncovered] = 1.0
+    col_sums = mask.sum(axis=0)
     return mask / col_sums
 
 
@@ -56,9 +58,10 @@ def partition_hierarchical(targets, nb_workers, numb_labels, config, rng):
         matrix = build_dirichlet_matrix(nb_groups, numb_labels, alpha, rng)
     elif method == "pathological":
         matrix = build_pathological_matrix(
-            nb_groups, numb_labels,
+            nb_groups,
+            numb_labels,
             config.get("classes_per_group", 1),
-            config.get("group_overlap", 0)
+            config.get("group_overlap", 0),
         )
     else:
         matrix = np.full((nb_groups, numb_labels), 1.0 / nb_groups)
@@ -90,14 +93,19 @@ def _draw_hierarchical(targets, matrix, workers_per_group, numb_labels, rng):
     for c in range(numb_labels):
         label_indices = indices_per_label[c]
         n_samples = len(label_indices)
-        proportions = matrix[:, c]
+        expected = matrix[:, c] * n_samples
+        counts = np.floor(expected).astype(int)
+        remainder = n_samples - counts.sum()
+        if remainder:
+            fractions = expected - counts
+            tie_break = rng.permutation(nb_groups)
+            order = tie_break[np.argsort(fractions[tie_break])[::-1]]
+            counts[order[:remainder]] += 1
 
-        split_points = np.round(np.cumsum(proportions) * n_samples).astype(int)
-        split_points = np.insert(split_points, 0, 0)
-
-        for g in range(nb_groups):
-            start, end = split_points[g], split_points[g+1]
-            group_pools[g].extend(label_indices[start:end])
+        start = 0
+        for group_id, count in enumerate(counts):
+            group_pools[group_id].extend(label_indices[start : start + count])
+            start += count
 
     cursor = 0
     for g in range(nb_groups):

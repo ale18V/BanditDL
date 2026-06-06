@@ -91,88 +91,33 @@ def _partition_worker_indices(
     *,
     honest_workers,
     numb_labels,
-    heterogeneity=False,
-    distinct_datasets=False,
     gamma_similarity=None,
     alpha_dirichlet=None,
-    nb_datapoints=None,
     partition_method=None,
-    partition_style=None,
-    classes_per_worker=None,
-    nb_shards=None,
-    shards_per_worker=None,
     clusters=None,
     classes_per_group=None,
     group_overlap=0,
-    rng=None,
+    rng,
 ):
   """Return ({worker_id: [indices]}, stats) using matrix-based partitioning."""
-  if rng is None:
-      rng = np.random.default_rng()
-
   def _compute_stats(partition_map):
-      stats = {}
-      targets_np = np.asarray(targets)
-      for w_id, idx_list in partition_map.items():
-          w_targets = targets_np[idx_list]
-          labels, counts = np.unique(w_targets, return_counts=True)
-          stats[int(w_id)] = {
-              "total": len(idx_list),
-              "labels": {int(l): int(c) for l, c in zip(labels, counts, strict=False)}
-          }
-      return stats
-
-  # 1. Handle legacy non-matrix modes
-  if heterogeneity:
-    ordered_indices = []
-    for label in range(numb_labels):
-      label_indices = np.flatnonzero(targets == label).tolist()
-      ordered_indices += label_indices
-    splits = np.array_split(ordered_indices, honest_workers)
-    indices = {worker_id: splits[worker_id].tolist() for worker_id in range(honest_workers)}
-    return indices, _compute_stats(indices)
-
-  if distinct_datasets and gamma_similarity is not None:
-    numb_samples = len(targets)
-    numb_samples_iid = int(gamma_similarity * numb_samples)
-    homogeneous_indices = list(range(numb_samples))
-    rng.shuffle(homogeneous_indices)
-    homogeneous_indices = homogeneous_indices[:numb_samples_iid]
-    homogeneous_set = set(homogeneous_indices)
-    split_homogeneous = np.array_split(homogeneous_indices, honest_workers)
-
-    ordered_heterogeneous = []
-    for label in range(numb_labels):
-      label_indices = np.flatnonzero(targets == label).tolist()
-      ordered_heterogeneous += [i for i in label_indices if i not in homogeneous_set]
-    split_heterogeneous = np.array_split(ordered_heterogeneous, honest_workers)
-    indices = {
-      worker_id: list(split_homogeneous[worker_id]) + list(split_heterogeneous[worker_id])
-      for worker_id in range(honest_workers)
-    }
-    return indices, _compute_stats(indices)
-
-  if distinct_datasets:
-    sample_indices = list(range(len(targets)))
-    rng.shuffle(sample_indices)
-    if nb_datapoints is None:
-      splits = np.array_split(sample_indices, honest_workers)
-      indices = {worker_id: list(splits[worker_id]) for worker_id in range(honest_workers)}
-    else:
-      indices = {
-        worker_id: sample_indices[worker_id * nb_datapoints : (worker_id + 1) * nb_datapoints]
-        for worker_id in range(honest_workers)
+    stats = {}
+    targets_np = np.asarray(targets)
+    for worker_id, idx_list in partition_map.items():
+      labels, counts = np.unique(targets_np[idx_list], return_counts=True)
+      stats[int(worker_id)] = {
+        "total": len(idx_list),
+        "labels": {int(label): int(count) for label, count in zip(labels, counts, strict=False)},
       }
-    return indices, _compute_stats(indices)
+    return stats
 
-  # 2. Map current config to the hierarchical matrix logic
   config = {
-      "method": partition_method,
-      "clusters": clusters,
-      "alpha": alpha_dirichlet,
-      "classes_per_group": classes_per_group or classes_per_worker or shards_per_worker or 1,
-      "group_overlap": group_overlap,
-      "gamma_similarity": gamma_similarity,
+    "method": partition_method,
+    "clusters": clusters,
+    "alpha": alpha_dirichlet,
+    "classes_per_group": classes_per_group,
+    "group_overlap": group_overlap,
+    "gamma_similarity": gamma_similarity,
   }
 
   indices = partition_hierarchical(targets, honest_workers, numb_labels, config, rng)
@@ -197,12 +142,10 @@ def _uniform_train_test_split(indices, test_ratio, rng):
 
 # ---------------------------------------------------------------------------- #
 def make_train_validation_test_datasets(
-    dataset, *, heterogeneity=False, numb_labels=None, distinct_datasets=False,
-    gamma_similarity=None, alpha_dirichlet=None, nb_datapoints=None,
+    dataset, *, numb_labels=None, gamma_similarity=None, alpha_dirichlet=None,
     honest_workers=None, train_batch=None, test_batch=None,
     global_test_ratio=0.1, local_test_ratio=0.2, split_seed=0,
-    partition_method=None, partition_style=None,
-    classes_per_worker=None, nb_shards=None, shards_per_worker=None,
+    partition_method=None,
     clusters=None, classes_per_group=None, group_overlap=0,
     dataset_mode=None, nb_writers_limit=None):
   """Build per-worker training + per-worker local test DataLoaders, plus a shared
@@ -222,7 +165,8 @@ def make_train_validation_test_datasets(
   Returns:
     (train_loaders: dict[int, DataLoader],
      local_test_loaders: dict[int, DataLoader],
-     global_test_loader: DataLoader)
+     global_test_loader: DataLoader,
+     distribution_stats: dict)
   """
   if dataset_mode == "writer_per_node":
     if not _is_femnist(dataset):
@@ -238,6 +182,7 @@ def make_train_validation_test_datasets(
       local_test_ratio=local_test_ratio,
       split_seed=split_seed,
       writers_cap=nb_writers_limit,
+      return_stats=True,
     )
 
   full_train_dataset, full_targets = _build_underlying_train(dataset)
@@ -269,16 +214,9 @@ def make_train_validation_test_datasets(
     client_pool_targets,
     honest_workers=honest_workers,
     numb_labels=numb_labels,
-    heterogeneity=heterogeneity,
-    distinct_datasets=distinct_datasets,
     gamma_similarity=gamma_similarity,
     alpha_dirichlet=alpha_dirichlet,
-    nb_datapoints=nb_datapoints,
     partition_method=partition_method,
-    partition_style=partition_style,
-    classes_per_worker=classes_per_worker,
-    nb_shards=nb_shards,
-    shards_per_worker=shards_per_worker,
     clusters=clusters,
     classes_per_group=classes_per_group,
     group_overlap=group_overlap,

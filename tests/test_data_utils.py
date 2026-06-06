@@ -16,7 +16,8 @@ def test_partition_hierarchical_zero_data_loss():
 
     # Manually mock the matrix for this test to be precise
     from banditdl.data.dataset_utils import _draw_hierarchical
-    matrix = np.array([[0.2], [0.3], [0.5]]) # 3 clusters x 1 label
+
+    matrix = np.array([[0.2], [0.3], [0.5]])  # 3 clusters x 1 label
     workers_per_group = [1, 1, 1]
 
     samples = _draw_hierarchical(targets, matrix, workers_per_group, numb_labels=1, rng=rng)
@@ -32,27 +33,22 @@ def test_pathological_mode_respects_group_logic():
     rng = np.random.default_rng(0)
 
     # 2 clusters, 2 workers each. Each group gets 2 distinct labels.
-    config = {
-        "method": "pathological",
-        "clusters": 2,
-        "classes_per_group": 2,
-        "group_overlap": 0
-    }
+    config = {"method": "pathological", "clusters": 2, "classes_per_group": 2, "group_overlap": 0}
 
-    worker_samples = partition_hierarchical(targets, nb_workers=4, numb_labels=10, config=config, rng=rng)
+    worker_samples = partition_hierarchical(
+        targets, nb_workers=4, numb_labels=10, config=config, rng=rng
+    )
 
-    # Cluster 0 (Workers 0,1) gets labels {0, 1}
-    # Cluster 1 (Workers 2,3) gets labels {2, 3}
-    group0_labels = {0, 1}
-    group1_labels = {2, 3}
+    group0 = worker_samples[0] + worker_samples[1]
+    group1 = worker_samples[2] + worker_samples[3]
+    group0_labels = {int(targets[i]) for i in group0}
+    group1_labels = {int(targets[i]) for i in group1}
 
-    for w_id in [0, 1]:
-        labels_seen = set(int(targets[i].item()) for i in worker_samples[w_id])
-        assert labels_seen <= group0_labels
-
-    for w_id in [2, 3]:
-        labels_seen = set(int(targets[i].item()) for i in worker_samples[w_id])
-        assert labels_seen <= group1_labels
+    assert {0, 1} <= group0_labels
+    assert not ({0, 1} & group1_labels)
+    assert {2, 3} <= group1_labels
+    assert not ({2, 3} & group0_labels)
+    assert sorted(group0 + group1) == list(range(len(targets)))
 
 
 def test_dirichlet_mode_covers_all_workers():
@@ -62,7 +58,9 @@ def test_dirichlet_mode_covers_all_workers():
     # 10 workers, node-level heterogeneity (clusters=10)
     config = {"alpha": 0.5, "clusters": 10}
 
-    worker_samples = partition_hierarchical(targets, nb_workers=10, numb_labels=5, config=config, rng=rng)
+    worker_samples = partition_hierarchical(
+        targets, nb_workers=10, numb_labels=5, config=config, rng=rng
+    )
 
     assert len(worker_samples) == 10
     all_indices = []
@@ -80,14 +78,11 @@ def test_grouped_pathological_with_overlap():
 
     # 3 clusters, overlap of 1 label
     # G0: {0,1,2}, G1: {2,3,4}, G2: {4,5,6}
-    config = {
-        "method": "pathological",
-        "clusters": 3,
-        "classes_per_group": 3,
-        "group_overlap": 1
-    }
+    config = {"method": "pathological", "clusters": 3, "classes_per_group": 3, "group_overlap": 1}
 
-    worker_samples = partition_hierarchical(targets, nb_workers=3, numb_labels=10, config=config, rng=rng)
+    worker_samples = partition_hierarchical(
+        targets, nb_workers=3, numb_labels=10, config=config, rng=rng
+    )
 
     # Label 2 should be shared by G0 and G1
     # Label 4 should be shared by G1 and G2
@@ -95,6 +90,35 @@ def test_grouped_pathological_with_overlap():
     g1_labels = set(int(targets[i].item()) for i in worker_samples[1])
     g2_labels = set(int(targets[i].item()) for i in worker_samples[2])
 
-    assert g0_labels == {0, 1, 2}
-    assert g1_labels == {2, 3, 4}
-    assert g2_labels == {4, 5, 6}
+    assert {0, 1, 2} <= g0_labels
+    assert {2, 3, 4} <= g1_labels
+    assert {4, 5, 6} <= g2_labels
+    all_indices = sum(worker_samples.values(), [])
+    assert sorted(all_indices) == list(range(len(targets)))
+
+
+def test_null_clusters_means_one_cluster_per_worker():
+    targets = _toy_targets(samples_per_label=50, numb_labels=5)
+    config = {"method": "dirichlet", "alpha": 0.5, "clusters": None}
+
+    samples = partition_hierarchical(
+        targets,
+        nb_workers=5,
+        numb_labels=5,
+        config=config,
+        rng=np.random.default_rng(7),
+    )
+
+    assert len(samples) == 5
+    assert sorted(sum(samples.values(), [])) == list(range(len(targets)))
+
+
+def test_clusters_must_divide_worker_count():
+    with np.testing.assert_raises_regex(ValueError, "divisible"):
+        partition_hierarchical(
+            _toy_targets(),
+            nb_workers=5,
+            numb_labels=5,
+            config={"method": "dirichlet", "alpha": 0.5, "clusters": 2},
+            rng=np.random.default_rng(0),
+        )
