@@ -117,7 +117,7 @@ def _partition_worker_indices(
           w_targets = targets_np[idx_list]
           labels, counts = np.unique(w_targets, return_counts=True)
           stats[int(w_id)] = {
-              "total": int(len(idx_list)),
+              "total": len(idx_list),
               "labels": {int(l): int(c) for l, c in zip(labels, counts, strict=False)}
           }
       return stats
@@ -172,6 +172,7 @@ def _partition_worker_indices(
       "alpha": alpha_dirichlet,
       "classes_per_group": classes_per_group or classes_per_worker or shards_per_worker or 1,
       "group_overlap": group_overlap,
+      "gamma_similarity": gamma_similarity,
   }
 
   indices = partition_hierarchical(targets, honest_workers, numb_labels, config, rng)
@@ -202,7 +203,7 @@ def make_train_validation_test_datasets(
     global_test_ratio=0.1, local_test_ratio=0.2, split_seed=0,
     partition_method=None, partition_style=None,
     classes_per_worker=None, nb_shards=None, shards_per_worker=None,
-    nb_groups=None, classes_per_group=None, group_overlap=0,
+    clusters=None, classes_per_group=None, group_overlap=0,
     dataset_mode=None, nb_writers_limit=None):
   """Build per-worker training + per-worker local test DataLoaders, plus a shared
   global test DataLoader.
@@ -281,6 +282,7 @@ def make_train_validation_test_datasets(
     clusters=clusters,
     classes_per_group=classes_per_group,
     group_overlap=group_overlap,
+    rng=rng,
   )
 
   # Stage 3: per-worker uniform local train/test split, then build loaders.

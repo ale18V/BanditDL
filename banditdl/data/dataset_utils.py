@@ -2,6 +2,7 @@
 
 import os
 import pathlib
+
 import numpy as np
 
 
@@ -25,14 +26,12 @@ def build_pathological_matrix(nb_groups, nb_labels, labels_per_group, overlap):
     """Build a (Groups x Labels) probability matrix using a sparse mask."""
     stride = labels_per_group - overlap
     mask = np.zeros((nb_groups, nb_labels))
-    
+
     for g in range(nb_groups):
-        start = g * stride
-        end = start + labels_per_group
-        if end > nb_labels:
-            raise ValueError(f"Label range [{start}, {end}) exceeds total labels {nb_labels}")
-        mask[g, start:end] = 1.0
-        
+        start = (g * stride) % nb_labels
+        for i in range(labels_per_group):
+            mask[g, (start + i) % nb_labels] = 1.0
+
     col_sums = mask.sum(axis=0)
     col_sums[col_sums == 0] = 1.0
     return mask / col_sums
@@ -45,20 +44,20 @@ def partition_hierarchical(targets, nb_workers, numb_labels, config, rng):
         raise ValueError(f"clusters ({nb_groups}) cannot exceed nb_workers ({nb_workers})")
     if nb_workers % nb_groups != 0:
         raise ValueError(f"nb_workers ({nb_workers}) must be divisible by clusters ({nb_groups})")
-        
+
     group_size = nb_workers // nb_groups
     workers_per_group = [group_size] * nb_groups
-        
+
     # 1. Build the base heterogeneity matrix
     method = config.get("method", "dirichlet")
     alpha = config.get("alpha")
-    
+
     if alpha is not None:
         matrix = build_dirichlet_matrix(nb_groups, numb_labels, alpha, rng)
     elif method == "pathological":
         matrix = build_pathological_matrix(
-            nb_groups, numb_labels, 
-            config.get("classes_per_group", 1), 
+            nb_groups, numb_labels,
+            config.get("classes_per_group", 1),
             config.get("group_overlap", 0)
         )
     else:
@@ -78,7 +77,7 @@ def _draw_hierarchical(targets, matrix, workers_per_group, numb_labels, rng):
     """Draw indices based on the group-class matrix and split IID within groups."""
     nb_groups = len(workers_per_group)
     worker_samples = {}
-    
+
     targets = np.asarray(targets)
     indices_per_label = []
     for label in range(numb_labels):
@@ -87,15 +86,15 @@ def _draw_hierarchical(targets, matrix, workers_per_group, numb_labels, rng):
         indices_per_label.append(indices)
 
     group_pools = {g: [] for g in range(nb_groups)}
-    
+
     for c in range(numb_labels):
         label_indices = indices_per_label[c]
         n_samples = len(label_indices)
         proportions = matrix[:, c]
-        
+
         split_points = np.round(np.cumsum(proportions) * n_samples).astype(int)
         split_points = np.insert(split_points, 0, 0)
-        
+
         for g in range(nb_groups):
             start, end = split_points[g], split_points[g+1]
             group_pools[g].extend(label_indices[start:end])
@@ -108,5 +107,5 @@ def _draw_hierarchical(targets, matrix, workers_per_group, numb_labels, rng):
         for chunk in worker_chunks:
             worker_samples[cursor] = chunk.tolist()
             cursor += 1
-            
+
     return worker_samples
