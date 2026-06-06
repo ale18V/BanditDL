@@ -61,6 +61,7 @@ class EvaluationConfig:
 
 @dataclass
 class HeterogeneityConfig:
+    _target_: str = "banditdl.data.partitioning.SyntheticPartitionStrategy"
     method: str = "dirichlet"
     clusters: int | None = None  # Number of clusters. Defaults to topology.nodes.
 
@@ -97,6 +98,10 @@ class BanditDLConfig:
     def uses_natural_partition(self) -> bool:
         target = str(self.dataset.partitioner.get("_target_", ""))
         return target.endswith("NaturalOwnerPartitionStrategy")
+
+    @property
+    def partitioner_config(self) -> dict[str, Any]:
+        return self.dataset.partitioner or vars(self.heterogeneity)
 
     @property
     def total_nodes(self) -> int:

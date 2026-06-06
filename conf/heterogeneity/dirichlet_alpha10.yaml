@@ -1,2 +1,3 @@
+_target_: banditdl.data.partitioning.SyntheticPartitionStrategy
 method: dirichlet
 alpha: 10.0

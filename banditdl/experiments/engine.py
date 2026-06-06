@@ -402,7 +402,7 @@ def run_experiment(
     _log_start(cfg, result_dir)
     data = build_dataset_bundle(
         instantiate(cfg.dataset.provider),
-        instantiate(cfg.dataset.partitioner),
+        instantiate(cfg.partitioner_config),
         DatasetBuildConfig(
             nodes=cfg.nb_honests,
             train_batch=cfg.optimization.batch_size,

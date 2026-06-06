@@ -27,9 +27,8 @@ class PartitionStrategy(Protocol):
 
 
 class SyntheticPartitionStrategy:
-    def __init__(self, method: str, num_classes: int, **params):
+    def __init__(self, method: str, **params):
         self.method = method
-        self.num_classes = num_classes
         self.config = {"method": method, **params}
 
     def partition(self, pool, nodes, global_test_ratio, rng) -> PartitionResult:
@@ -39,7 +38,7 @@ class SyntheticPartitionStrategy:
         local = partition_hierarchical(
             pool.targets[client_indices],
             nodes,
-            self.num_classes,
+            int(np.max(pool.targets)) + 1,
             self.config,
             rng,
         )

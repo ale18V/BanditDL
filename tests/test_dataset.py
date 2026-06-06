@@ -28,7 +28,7 @@ class _Provider:
 def test_bundle_uses_eval_view_outside_training():
     bundle = build_dataset_bundle(
         _Provider(),
-        SyntheticPartitionStrategy("dirichlet", num_classes=2, alpha=1.0),
+        SyntheticPartitionStrategy("dirichlet", alpha=1.0),
         DatasetBuildConfig(2, 4, 4, 0.2, 0.2, 0),
     )
 
@@ -42,7 +42,6 @@ def test_synthetic_partition_uses_every_sample_once():
     pool = _Provider().load()
     result = SyntheticPartitionStrategy(
         "pathological",
-        num_classes=2,
         classes_per_group=1,
     ).partition(pool, nodes=2, global_test_ratio=0.2, rng=np.random.default_rng(0))
 
@@ -54,7 +53,7 @@ def test_synthetic_partition_uses_every_sample_once():
 def test_bundle_audit_reports_full_node_distributions():
     bundle = build_dataset_bundle(
         _Provider(),
-        SyntheticPartitionStrategy("dirichlet", num_classes=2, alpha=1.0),
+        SyntheticPartitionStrategy("dirichlet", alpha=1.0),
         DatasetBuildConfig(2, 4, 4, 0.2, 0.2, 0),
     )
 

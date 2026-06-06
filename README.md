@@ -207,7 +207,6 @@ Dataset configs are in `conf/dataset/`.
 - `model`: model constructor from `banditdl/data/models.py`, for example `cnn_mnist` or `cnn_cifar_old`.
 - `numb_labels`: number of output classes.
 - `provider`: Hydra-instantiated dataset loader.
-- `partitioner`: Hydra-instantiated natural or synthetic partition strategy.
 
 `dataset=femnist` assigns one writer to each honest node and holds out complete
 writers for global evaluation. `dataset=femnist_pool` pools all writers and
@@ -216,6 +215,7 @@ applies the selected `heterogeneity` profile like MNIST or CIFAR-10.
 ### Heterogeneity Config
 
 Heterogeneity configs are in `conf/heterogeneity/`.
+Each profile directly configures the synthetic partition strategy.
 
 - `alpha`: Dirichlet data heterogeneity parameter passed as `dirichlet-alpha`.
 - `clusters`: number of data-distribution clusters. `null` means one cluster per honest node.

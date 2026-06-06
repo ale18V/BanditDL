@@ -78,8 +78,8 @@ def _validate_heterogeneity(c: BanditDLConfig) -> None:
 def _validate_dataset(c: BanditDLConfig) -> None:
     if not c.dataset.provider.get("_target_"):
         raise ValueError("dataset.provider._target_ is required")
-    if not c.dataset.partitioner.get("_target_"):
-        raise ValueError("dataset.partitioner._target_ is required")
+    if not c.partitioner_config.get("_target_"):
+        raise ValueError("a dataset or heterogeneity partitioner target is required")
 
 
 def _run_name(c: BanditDLConfig, byz_budget: int) -> str:

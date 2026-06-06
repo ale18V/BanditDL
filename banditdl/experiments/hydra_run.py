@@ -16,7 +16,7 @@ from banditdl.utils.seed_averaging import run_seed_averaged
 def main(cfg: DictConfig) -> None:
     run_cfg = build_engine_config(cfg)
     config = run_cfg.config
-    print("\n" + OmegaConf.to_yaml(config) + "\n")
+    print("\n" + OmegaConf.to_yaml(cfg, resolve=True) + "\n")
 
     device = resolve_device(cfg)
 

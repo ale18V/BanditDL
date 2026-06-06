@@ -41,14 +41,14 @@ Important parameters:
 
 ## Dataset Partitioning
 
-Dataset profiles select both a provider and a partition strategy:
+Dataset profiles select a provider:
 
 - `dataset=mnist`: MNIST with synthetic Dirichlet/pathological partitioning.
 - `dataset=cifar10`: CIFAR-10 with synthetic partitioning.
 - `dataset=femnist`: one natural FEMNIST writer per honest node.
 - `dataset=femnist_pool`: pooled FEMNIST with synthetic partitioning.
 
-For synthetic datasets, select a heterogeneity profile:
+For synthetic datasets, the heterogeneity profile is the partition strategy:
 
 ```bash
 uv run -m banditdl \

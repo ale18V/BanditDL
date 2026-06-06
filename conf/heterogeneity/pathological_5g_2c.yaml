@@ -1,3 +1,4 @@
+_target_: banditdl.data.partitioning.SyntheticPartitionStrategy
 method: pathological
 clusters: 5
 classes_per_group: 2

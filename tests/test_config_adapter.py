@@ -16,12 +16,6 @@ def _base_cfg():
                     "_target_": "banditdl.data.providers.TorchvisionProvider",
                     "name": "mnist",
                 },
-                "partitioner": {
-                    "_target_": "banditdl.data.partitioning.SyntheticPartitionStrategy",
-                    "method": "dirichlet",
-                    "num_classes": 10,
-                    "alpha": 0.5,
-                },
             },
             "topology": {"nodes": 30, "sampling": 0.2},
             "sampler": {
@@ -31,7 +25,12 @@ def _base_cfg():
             },
             "adversary": {"byzcount": 0, "byzantine_budget": 0, "attack": None},
             "aggregator": {"pre_aggregator": "nnm", "aggregator": "average", "rag": True},
-            "heterogeneity": {"method": "dirichlet", "alpha": 0.5, "clusters": None},
+            "heterogeneity": {
+                "_target_": "banditdl.data.partitioning.SyntheticPartitionStrategy",
+                "method": "dirichlet",
+                "alpha": 0.5,
+                "clusters": None,
+            },
             "optimization": {
                 "batch_size": 25,
                 "loss": "NLLLoss",
@@ -191,12 +190,6 @@ def test_build_engine_config_femnist_pool_mode_uses_heterogeneity():
             "model": "cnn_femnist",
             "numb_labels": 62,
             "provider": {"_target_": "banditdl.data.providers.FemnistProvider"},
-            "partitioner": {
-                "_target_": "banditdl.data.partitioning.SyntheticPartitionStrategy",
-                "method": "dirichlet",
-                "num_classes": 62,
-                "alpha": 0.5,
-            },
         }
     )
 
