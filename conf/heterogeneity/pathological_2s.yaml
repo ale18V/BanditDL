@@ -1,6 +1,0 @@
-method: pathological
-partition: shards_per_worker
-shards_per_worker: 2
-nb_shards: null
-numb_labels: 10
-alpha: null

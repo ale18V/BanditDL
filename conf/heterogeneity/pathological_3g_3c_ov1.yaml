@@ -1,0 +1,4 @@
+method: pathological
+clusters: 3
+classes_per_group: 3
+group_overlap: 1

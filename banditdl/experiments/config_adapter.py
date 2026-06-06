@@ -22,7 +22,11 @@ class EngineRunConfig:
         c = self.config
         is_dynamic = self.run_mode == "dynamic"
 
-        sampler_name = c.sampler.get("name", c.topology.neighbor_sampler) if c.sampler else c.topology.neighbor_sampler
+        sampler_name = (
+            c.sampler.get("name", c.topology.neighbor_sampler)
+            if c.sampler
+            else c.topology.neighbor_sampler
+        )
 
         return WorkerConfig(
             model=c.dataset.model,
@@ -88,8 +92,16 @@ def build_engine_config(cfg: DictConfig) -> EngineRunConfig:
 
 
 def _run_name(c: BanditDLConfig, byz_budget: int, nb_neighbors: int) -> str:
-    sampler = c.sampler.get("name", c.topology.neighbor_sampler) if c.sampler else c.topology.neighbor_sampler
-    topology_token = f"-sampling_{c.topology.sampling}" if c.topology.sampling is not None else f"-degree_{nb_neighbors}"
+    sampler = (
+        c.sampler.get("name", c.topology.neighbor_sampler)
+        if c.sampler
+        else c.topology.neighbor_sampler
+    )
+    topology_token = (
+        f"-sampling_{c.topology.sampling}"
+        if c.topology.sampling is not None
+        else f"-degree_{nb_neighbors}"
+    )
 
     return (
         f"{c.dataset.dataset}-n_{c.topology.nodes}"
@@ -107,28 +119,36 @@ def _run_name(c: BanditDLConfig, byz_budget: int, nb_neighbors: int) -> str:
 
 def _partition_token(c: BanditDLConfig) -> str:
     if c.dataset.mode == "writer_per_node":
-        if c.dataset.dataset != "femnist":
-            raise ValueError("dataset.mode='writer_per_node' is only valid for FEMNIST")
-        cap = c.dataset.nb_writers_limit
-        return "femnist_writers" if cap is None else f"femnist_writers_cap_{cap}"
+        return _femnist_writer_token(c)
 
-    if c.heterogeneity.method == "dirichlet":
-        return f"alpha_{c.heterogeneity.alpha}"
+    method = c.heterogeneity.method
+    # Common prefix
+    prefix = f"{method}"
+    if c.heterogeneity.clusters and c.heterogeneity.clusters < c.topology.nodes:
+        prefix = f"clustered_{c.heterogeneity.clusters}_{prefix}"
 
-    if c.heterogeneity.method == "pathological":
-        style = c.heterogeneity.partition
-        if style is None:
-            raise ValueError("heterogeneity.partition is required when method=pathological")
-        if style == "classes_per_worker":
-            return f"pathological_c_{c.heterogeneity.classes_per_worker}"
-        if style == "shards_per_worker":
-            nb_shards = c.heterogeneity.nb_shards or "auto"
-            return f"pathological_s_{c.heterogeneity.shards_per_worker}_n_{nb_shards}"
-        if style == "grouped_classes":
-            base = f"pathological_g_{c.heterogeneity.nb_groups}x{c.heterogeneity.classes_per_group}"
-            ov = c.heterogeneity.group_overlap
-            return f"{base}_ov_{ov}" if ov else base
-    return f"hetero_{c.heterogeneity.method}"
+    details = ""
+    if method == "dirichlet":
+        if c.heterogeneity.alpha is None:
+            raise ValueError("alpha is required for dirichlet")
+        details = f"alpha_{c.heterogeneity.alpha}"
+    elif method == "pathological":
+        if c.heterogeneity.classes_per_group is None:
+            raise ValueError("classes_per_group is required for pathological")
+        details = f"c_{c.heterogeneity.classes_per_group}"
+        if c.heterogeneity.group_overlap:
+            details += f"_ov_{c.heterogeneity.group_overlap}"
+    if c.heterogeneity.gamma_similarity:
+        details += f"_gamma_{c.heterogeneity.gamma_similarity}"
+
+    return f"{prefix}_{details}" if details else prefix
+
+
+def _femnist_writer_token(c: BanditDLConfig) -> str:
+    if c.dataset.dataset != "femnist":
+        raise ValueError("dataset.mode='writer_per_node' is only valid for FEMNIST")
+    cap = c.dataset.nb_writers_limit
+    return "femnist_writers" if cap is None else f"femnist_writers_cap_{cap}"
 
 
 def resolve_device(cfg: DictConfig) -> str:

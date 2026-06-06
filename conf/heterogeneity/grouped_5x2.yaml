@@ -1,7 +1,0 @@
-method: pathological
-partition: grouped_classes
-nb_groups: 5
-classes_per_group: 2
-group_overlap: 0
-numb_labels: 10
-alpha: null

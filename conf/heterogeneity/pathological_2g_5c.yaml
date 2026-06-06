@@ -1,4 +1,4 @@
 method: pathological
-clusters: null # Node-level
+clusters: 2
 classes_per_group: 5
 group_overlap: 0

@@ -1,137 +1,100 @@
 import numpy as np
 import torch
 
-from banditdl.data.dataset_utils import (
-    draw_indices,
-    pathological_classes_per_worker,
-    pathological_grouped_classes,
-    pathological_shards_per_worker,
-)
-
-
-def test_draw_indices_advances_offsets_cumulatively():
-    samples_distribution = np.array([[0.2, 0.3, 0.5]])
-    indices_per_label = {0: list(range(10))}
-
-    samples = draw_indices(samples_distribution, indices_per_label, nb_workers=3)
-
-    assert samples == {0: [0, 1], 1: [2, 3, 4], 2: [5, 6, 7, 8, 9]}
+from banditdl.data.dataset_utils import partition_hierarchical
 
 
 def _toy_targets(samples_per_label=20, numb_labels=5):
     return torch.tensor([label for label in range(numb_labels) for _ in range(samples_per_label)])
 
 
-def test_pathological_classes_per_worker_respects_class_budget():
-    targets = _toy_targets(samples_per_label=20, numb_labels=5)
+def test_partition_hierarchical_zero_data_loss():
+    # Verify the cumulative sum logic fixes the systematic data loss bug
+    # (0.2, 0.3, 0.5) over 10 samples should be exactly [2, 3, 5]
+    targets = torch.tensor([0] * 10)
     rng = np.random.default_rng(0)
 
-    worker_samples = pathological_classes_per_worker(
-        targets, numb_labels=5, nb_workers=4, classes_per_worker=2, rng=rng
-    )
+    # Manually mock the matrix for this test to be precise
+    from banditdl.data.dataset_utils import _draw_hierarchical
+    matrix = np.array([[0.2], [0.3], [0.5]]) # 3 clusters x 1 label
+    workers_per_group = [1, 1, 1]
 
-    assert set(worker_samples) == {0, 1, 2, 3}
-    for worker_id, indices in worker_samples.items():
-        labels_seen = set(int(targets[i].item()) for i in indices)
-        assert len(labels_seen) <= 2, f"worker {worker_id} saw {labels_seen}"
-    all_indices = [i for indices in worker_samples.values() for i in indices]
-    assert len(set(all_indices)) == len(all_indices), "samples must not be duplicated across workers"
+    samples = _draw_hierarchical(targets, matrix, workers_per_group, numb_labels=1, rng=rng)
 
-
-def test_pathological_shards_per_worker_consumes_all_shards_by_default():
-    targets = _toy_targets(samples_per_label=20, numb_labels=5)
-    rng = np.random.default_rng(1)
-
-    worker_samples = pathological_shards_per_worker(
-        targets, numb_labels=5, nb_workers=4, shards_per_worker=2, rng=rng
-    )
-
-    all_indices = sorted(i for indices in worker_samples.values() for i in indices)
-    assert all_indices == list(range(20 * 5)), "shards_per_worker default should cover the whole dataset"
-    # np.array_split can make shards differ in size by 1 when the dataset is not
-    # evenly divisible, so per-worker counts (shards_per_worker=2 shards each) can
-    # differ by at most shards_per_worker. Assert that invariant, not an exact size.
-    counts = [len(indices) for indices in worker_samples.values()]
-    assert max(counts) - min(counts) <= 2
+    assert len(samples[0]) == 2
+    assert len(samples[1]) == 3
+    assert len(samples[2]) == 5
+    assert sorted(samples[0] + samples[1] + samples[2]) == list(range(10))
 
 
-def test_pathological_shards_per_worker_rejects_too_few_shards():
-    targets = _toy_targets(samples_per_label=20, numb_labels=5)
-    try:
-        pathological_shards_per_worker(
-            targets, numb_labels=5, nb_workers=4, shards_per_worker=2, nb_shards=4
-        )
-    except ValueError:
-        return
-    raise AssertionError("expected ValueError when nb_shards < nb_workers * shards_per_worker")
-
-
-def test_pathological_grouped_classes_disjoint_keeps_labels_within_group():
+def test_pathological_mode_respects_group_logic():
     targets = _toy_targets(samples_per_label=20, numb_labels=10)
     rng = np.random.default_rng(0)
 
-    worker_samples = pathological_grouped_classes(
-        targets, numb_labels=10, nb_workers=10, nb_groups=5, classes_per_group=2, rng=rng
-    )
+    # 2 clusters, 2 workers each. Each group gets 2 distinct labels.
+    config = {
+        "method": "pathological",
+        "clusters": 2,
+        "classes_per_group": 2,
+        "group_overlap": 0
+    }
 
-    expected_group_labels = [{0, 1}, {2, 3}, {4, 5}, {6, 7}, {8, 9}]
-    for worker_id, indices in worker_samples.items():
-        group = worker_id // 2
-        labels_seen = set(int(targets[i].item()) for i in indices)
-        assert labels_seen <= expected_group_labels[group], (
-            f"worker {worker_id} (group {group}) saw {labels_seen}, "
-            f"expected subset of {expected_group_labels[group]}"
-        )
-    all_indices = [i for indices in worker_samples.values() for i in indices]
-    assert len(set(all_indices)) == len(all_indices)
-    assert len(all_indices) == 20 * 10, "disjoint case should consume all samples"
+    worker_samples = partition_hierarchical(targets, nb_workers=4, numb_labels=10, config=config, rng=rng)
+
+    # Cluster 0 (Workers 0,1) gets labels {0, 1}
+    # Cluster 1 (Workers 2,3) gets labels {2, 3}
+    group0_labels = {0, 1}
+    group1_labels = {2, 3}
+
+    for w_id in [0, 1]:
+        labels_seen = set(int(targets[i].item()) for i in worker_samples[w_id])
+        assert labels_seen <= group0_labels
+
+    for w_id in [2, 3]:
+        labels_seen = set(int(targets[i].item()) for i in worker_samples[w_id])
+        assert labels_seen <= group1_labels
 
 
-def test_pathological_grouped_classes_distributes_remainder_to_first_groups():
-    targets = _toy_targets(samples_per_label=20, numb_labels=10)
+def test_dirichlet_mode_covers_all_workers():
+    targets = _toy_targets(samples_per_label=100, numb_labels=5)
+    rng = np.random.default_rng(42)
+
+    # 10 workers, node-level heterogeneity (clusters=10)
+    config = {"alpha": 0.5, "clusters": 10}
+
+    worker_samples = partition_hierarchical(targets, nb_workers=10, numb_labels=5, config=config, rng=rng)
+
+    assert len(worker_samples) == 10
+    all_indices = []
+    for indices in worker_samples.values():
+        assert len(indices) > 0
+        all_indices.extend(indices)
+
+    assert len(set(all_indices)) == 500
+    assert len(all_indices) == 500
+
+
+def test_grouped_pathological_with_overlap():
+    targets = _toy_targets(samples_per_label=50, numb_labels=10)
     rng = np.random.default_rng(0)
 
-    worker_samples = pathological_grouped_classes(
-        targets, numb_labels=10, nb_workers=7, nb_groups=3, classes_per_group=2, rng=rng
-    )
+    # 3 clusters, overlap of 1 label
+    # G0: {0,1,2}, G1: {2,3,4}, G2: {4,5,6}
+    config = {
+        "method": "pathological",
+        "clusters": 3,
+        "classes_per_group": 3,
+        "group_overlap": 1
+    }
 
-    expected_group_sizes = [3, 2, 2]
-    worker_groups = []
-    cursor = 0
-    for size in expected_group_sizes:
-        worker_groups.append(list(range(cursor, cursor + size)))
-        cursor += size
-    group_labels = [{0, 1}, {2, 3}, {4, 5}]
-    for g, members in enumerate(worker_groups):
-        for worker_id in members:
-            labels_seen = set(int(targets[i].item()) for i in worker_samples[worker_id])
-            assert labels_seen <= group_labels[g]
+    worker_samples = partition_hierarchical(targets, nb_workers=3, numb_labels=10, config=config, rng=rng)
 
+    # Label 2 should be shared by G0 and G1
+    # Label 4 should be shared by G1 and G2
+    g0_labels = set(int(targets[i].item()) for i in worker_samples[0])
+    g1_labels = set(int(targets[i].item()) for i in worker_samples[1])
+    g2_labels = set(int(targets[i].item()) for i in worker_samples[2])
 
-def test_pathological_grouped_classes_overlap_shares_labels_across_groups():
-    targets = _toy_targets(samples_per_label=20, numb_labels=10)
-    rng = np.random.default_rng(0)
-
-    worker_samples = pathological_grouped_classes(
-        targets, numb_labels=10, nb_workers=6, nb_groups=3, classes_per_group=3,
-        overlap=1, rng=rng,
-    )
-
-    expected_group_labels = [{0, 1, 2}, {2, 3, 4}, {4, 5, 6}]
-    for worker_id, indices in worker_samples.items():
-        group = worker_id // 2
-        labels_seen = set(int(targets[i].item()) for i in indices)
-        assert labels_seen <= expected_group_labels[group]
-    all_indices = [i for indices in worker_samples.values() for i in indices]
-    assert len(set(all_indices)) == len(all_indices), "samples must not be duplicated"
-
-
-def test_pathological_grouped_classes_rejects_too_many_labels():
-    targets = _toy_targets(samples_per_label=20, numb_labels=10)
-    try:
-        pathological_grouped_classes(
-            targets, numb_labels=10, nb_workers=6, nb_groups=3, classes_per_group=4
-        )
-    except ValueError:
-        return
-    raise AssertionError("expected ValueError when nb_groups * classes_per_group > numb_labels")
+    assert g0_labels == {0, 1, 2}
+    assert g1_labels == {2, 3, 4}
+    assert g2_labels == {4, 5, 6}

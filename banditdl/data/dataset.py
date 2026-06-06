@@ -12,7 +12,6 @@
  # Dataset wrappers/helpers.
 ###
 
-import random
 
 import numpy as np
 import torch
@@ -20,11 +19,8 @@ import torchvision
 import torchvision.transforms as T
 
 from .dataset_utils import (
-  draw_indices,
   get_default_root,
-  pathological_classes_per_worker,
-  pathological_grouped_classes,
-  pathological_shards_per_worker,
+  partition_hierarchical,
 )
 
 
@@ -105,92 +101,81 @@ def _partition_worker_indices(
     classes_per_worker=None,
     nb_shards=None,
     shards_per_worker=None,
-    nb_groups=None,
+    clusters=None,
     classes_per_group=None,
     group_overlap=0,
+    rng=None,
 ):
-  """Return `{worker_id: [sample_index, ...]}` over `targets` according to the
-  selected partitioning scheme.
+  """Return ({worker_id: [indices]}, stats) using matrix-based partitioning."""
+  if rng is None:
+      rng = np.random.default_rng()
 
-  This is the pure partitioning logic split off from `Dataset.__init__` so that
-  the caller can drive both the train and local-test DataLoader construction
-  from the same partition.
-  """
-  numb_samples = len(targets)
+  def _compute_stats(partition_map):
+      stats = {}
+      targets_np = np.asarray(targets)
+      for w_id, idx_list in partition_map.items():
+          w_targets = targets_np[idx_list]
+          labels, counts = np.unique(w_targets, return_counts=True)
+          stats[int(w_id)] = {
+              "total": int(len(idx_list)),
+              "labels": {int(l): int(c) for l, c in zip(labels, counts, strict=False)}
+          }
+      return stats
 
+  # 1. Handle legacy non-matrix modes
   if heterogeneity:
     ordered_indices = []
     for label in range(numb_labels):
-      label_indices = (targets == label).nonzero().tolist()
-      label_indices = [item for sublist in label_indices for item in sublist]
+      label_indices = np.flatnonzero(targets == label).tolist()
       ordered_indices += label_indices
     splits = np.array_split(ordered_indices, honest_workers)
-    return {worker_id: splits[worker_id].tolist() for worker_id in range(honest_workers)}
+    indices = {worker_id: splits[worker_id].tolist() for worker_id in range(honest_workers)}
+    return indices, _compute_stats(indices)
 
   if distinct_datasets and gamma_similarity is not None:
+    numb_samples = len(targets)
     numb_samples_iid = int(gamma_similarity * numb_samples)
     homogeneous_indices = list(range(numb_samples))
-    random.shuffle(homogeneous_indices)
+    rng.shuffle(homogeneous_indices)
     homogeneous_indices = homogeneous_indices[:numb_samples_iid]
     homogeneous_set = set(homogeneous_indices)
     split_homogeneous = np.array_split(homogeneous_indices, honest_workers)
 
     ordered_heterogeneous = []
     for label in range(numb_labels):
-      label_indices = (targets == label).nonzero().tolist()
-      label_indices = [item for sublist in label_indices for item in sublist]
+      label_indices = np.flatnonzero(targets == label).tolist()
       ordered_heterogeneous += [i for i in label_indices if i not in homogeneous_set]
     split_heterogeneous = np.array_split(ordered_heterogeneous, honest_workers)
-    return {
+    indices = {
       worker_id: list(split_homogeneous[worker_id]) + list(split_heterogeneous[worker_id])
       for worker_id in range(honest_workers)
     }
+    return indices, _compute_stats(indices)
 
   if distinct_datasets:
-    sample_indices = list(range(numb_samples))
-    random.shuffle(sample_indices)
+    sample_indices = list(range(len(targets)))
+    rng.shuffle(sample_indices)
     if nb_datapoints is None:
       splits = np.array_split(sample_indices, honest_workers)
-      return {worker_id: list(splits[worker_id]) for worker_id in range(honest_workers)}
-    return {
-      worker_id: sample_indices[worker_id * nb_datapoints : (worker_id + 1) * nb_datapoints]
-      for worker_id in range(honest_workers)
-    }
+      indices = {worker_id: list(splits[worker_id]) for worker_id in range(honest_workers)}
+    else:
+      indices = {
+        worker_id: sample_indices[worker_id * nb_datapoints : (worker_id + 1) * nb_datapoints]
+        for worker_id in range(honest_workers)
+      }
+    return indices, _compute_stats(indices)
 
-  if partition_method == "pathological":
-    if partition_style == "classes_per_worker":
-      return pathological_classes_per_worker(
-        targets, numb_labels, honest_workers, classes_per_worker
-      )
-    if partition_style == "shards_per_worker":
-      return pathological_shards_per_worker(
-        targets, numb_labels, honest_workers, shards_per_worker, nb_shards=nb_shards
-      )
-    if partition_style == "grouped_classes":
-      return pathological_grouped_classes(
-        targets, numb_labels, honest_workers, nb_groups, classes_per_group,
-        overlap=group_overlap,
-      )
-    raise ValueError(
-      f"Unknown pathological partition_style: {partition_style!r}. "
-      "Expected 'classes_per_worker', 'shards_per_worker', or 'grouped_classes'."
-    )
+  # 2. Map current config to the hierarchical matrix logic
+  config = {
+      "method": partition_method,
+      "clusters": clusters,
+      "alpha": alpha_dirichlet,
+      "classes_per_group": classes_per_group or classes_per_worker or shards_per_worker or 1,
+      "group_overlap": group_overlap,
+  }
 
-  if alpha_dirichlet is not None:
-    indices_per_label = {}
-    for label in range(numb_labels):
-      label_indices = (targets == label).nonzero().tolist()
-      indices_per_label[label] = [item for sublist in label_indices for item in sublist]
-    samples_distribution = np.random.dirichlet(
-      np.repeat(alpha_dirichlet, honest_workers), size=numb_labels
-    )
-    return draw_indices(samples_distribution, indices_per_label, honest_workers)
-
-  raise ValueError(
-    "No partitioning scheme selected: provide alpha_dirichlet, partition_method='pathological',"
-    " distinct_datasets=True, or heterogeneity=True."
-  )
-
+  indices = partition_hierarchical(targets, honest_workers, numb_labels, config, rng)
+  return indices, _compute_stats(indices)
 
 def _uniform_train_test_split(indices, test_ratio, rng):
   """Uniform shuffle + split `indices` into (train_indices, test_indices).
@@ -279,7 +264,7 @@ def make_train_validation_test_datasets(
     if isinstance(full_targets, torch.Tensor) \
     else torch.as_tensor([full_targets[i] for i in client_pool_indices_arr])
 
-  local_indices_per_worker = _partition_worker_indices(
+  local_indices_per_worker, distribution_stats = _partition_worker_indices(
     client_pool_targets,
     honest_workers=honest_workers,
     numb_labels=numb_labels,
@@ -293,7 +278,7 @@ def make_train_validation_test_datasets(
     classes_per_worker=classes_per_worker,
     nb_shards=nb_shards,
     shards_per_worker=shards_per_worker,
-    nb_groups=nb_groups,
+    clusters=clusters,
     classes_per_group=classes_per_group,
     group_overlap=group_overlap,
   )
@@ -323,4 +308,4 @@ def make_train_validation_test_datasets(
     global_test_subset, batch_size=test_batch, shuffle=False
   )
 
-  return train_loaders, local_test_loaders, global_test_loader
+  return train_loaders, local_test_loaders, global_test_loader, distribution_stats
