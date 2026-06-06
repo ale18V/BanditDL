@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import copy
-import json
+import logging
 import os
 import pathlib
 import random
@@ -24,6 +23,8 @@ from banditdl.experiments.config_schema import BanditDLConfig
 from banditdl.utils.math_utils import consensus_drift, neighbor_disagreement
 from banditdl.utils.results import make_result_file, store_result
 
+logger = logging.getLogger(__name__)
+
 
 def _setup_seed(seed: int) -> None:
     reproducible = seed >= 0
@@ -44,14 +45,13 @@ def _should_log_step(current_step: int, rounds: int) -> bool:
 
 
 def _log_start(cfg: BanditDLConfig, result_dir: pathlib.Path) -> None:
-    print(
-        "[banditdl] starting run: "
+    logger.info(
+        "starting run: "
         f"dataset={cfg.dataset.dataset}, model={cfg.dataset.model}, nodes={cfg.topology.nodes}, "
         f"honest={cfg.nb_honests}, byzantine={cfg.adversary.byzcount}, "
-        f"rounds={cfg.effective_rounds}, seed={cfg.seed}, device={cfg.device}",
-        flush=True,
+        f"rounds={cfg.effective_rounds}, seed={cfg.seed}, device={cfg.device}"
     )
-    print(f"[banditdl] results: {result_dir}", flush=True)
+    logger.info(f"results: {result_dir}")
 
 
 def _log_progress(
@@ -61,18 +61,18 @@ def _log_progress(
     validation_loss=None,
     train_loss=None,
 ) -> None:
-    message = f"[banditdl] round {current_step}/{cfg.effective_rounds}"
+    message = f"round {current_step}/{cfg.effective_rounds}"
     if accuracy is not None:
         message += f" | mean_accuracy={accuracy:.4f}"
     if validation_loss is not None:
         message += f" | val_loss={validation_loss:.4f}"
     if train_loss is not None:
         message += f" | train_loss={train_loss:.4f}"
-    print(message, flush=True)
+    logger.info(message)
 
 
 def _log_done() -> None:
-    print("[banditdl] finished run", flush=True)
+    logger.info("finished run")
 
 
 def _raise_if_nonfinite_weights(honest_workers, current_step: int) -> None:
@@ -90,19 +90,6 @@ class ResultTracker:
     def __init__(self, cfg: BanditDLConfig, result_dir: pathlib.Path, test_loader=None):
         self.cfg, self.result_dir, self.test_loader = cfg, result_dir, test_loader
         self.result_dir.mkdir(parents=True, exist_ok=True)
-        self.fd_validation = (result_dir / "validation").open("w")
-        self.fd_validation_worst = (result_dir / "validation_worst").open("w")
-        self.fd_validation_loss = (result_dir / "validation_loss").open("w")
-        self.fd_train_loss = (result_dir / "train_loss").open("w")
-
-        for fd, fields in [
-            (self.fd_validation, ["Step number", "Cross-accuracy"]),
-            (self.fd_validation_worst, ["Step number", "Cross-accuracy"]),
-            (self.fd_validation_loss, ["Step number", "Cross-loss"]),
-            (self.fd_train_loss, ["Step number", "Cross-loss"]),
-        ]:
-            make_result_file(fd, fields)
-
         self.validation_steps = []
 
         # Progressive saving for all metrics
@@ -111,9 +98,9 @@ class ResultTracker:
         nb_evals = (cfg.effective_rounds // delta) + 1 if delta > 0 else 1
 
         mmap_configs = {
-            "validation_accuracies.npy": (nb_evals, cfg.nb_honests),
-            "validation_losses.npy": (nb_evals, cfg.nb_honests),
-            "train_losses.npy": (nb_evals, cfg.nb_honests),
+            "local_accuracy.npy": (nb_evals, cfg.nb_honests),
+            "local_loss.npy": (nb_evals, cfg.nb_honests),
+            "train_loss.npy": (nb_evals, cfg.nb_honests),
             "neighbor_disagreement.npy": (cfg.effective_rounds, cfg.nb_honests),
             "consensus_drift.npy": (cfg.effective_rounds, cfg.nb_honests),
             "gradient_norms.npy": (cfg.effective_rounds, cfg.nb_honests),
@@ -145,21 +132,13 @@ class ResultTracker:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is not None:
-            self.save_snapshot()
-        for fd in [
-            self.fd_validation,
-            self.fd_validation_worst,
-            self.fd_validation_loss,
-            self.fd_train_loss,
-        ]:
-            fd.close()
         for mmap in self.mmaps.values():
             mmap.flush()
         if self.probs_mmap is not None:
             self.probs_mmap.flush()
 
     def save_audit(self, audit_data: dict):
+        import json
         with (self.result_dir / "audit.json").open("w") as f:
             json.dump(audit_data, f, indent=2)
 
@@ -172,19 +151,15 @@ class ResultTracker:
             v_losses = [w.compute_validation_loss() for w in honest_workers]
             t_losses = [w.compute_train_loss() for w in honest_workers]
 
-            self.mmaps["validation_accuracies.npy"][eval_idx] = np.array(accs, dtype="float32")
-            self.mmaps["validation_losses.npy"][eval_idx] = np.array(v_losses, dtype="float32")
-            self.mmaps["train_losses.npy"][eval_idx] = np.array(t_losses, dtype="float32")
+            self.mmaps["local_accuracy.npy"][eval_idx] = np.array(accs, dtype="float32")
+            self.mmaps["local_loss.npy"][eval_idx] = np.array(v_losses, dtype="float32")
+            self.mmaps["train_loss.npy"][eval_idx] = np.array(t_losses, dtype="float32")
 
             mean_acc, mean_v, mean_t = sum(accs) / len(accs), sum(v_losses) / len(v_losses), sum(t_losses) / len(t_losses)
             self.validation_steps.append(step)
 
-            store_result(self.fd_validation, step, mean_acc)
-            store_result(self.fd_validation_loss, step, mean_v)
-            store_result(self.fd_train_loss, step, mean_t)
-
             if eval_idx % 5 == 0:
-                for name in ["validation_accuracies.npy", "validation_losses.npy", "train_losses.npy"]:
+                for name in ["local_accuracy.npy", "local_loss.npy", "train_loss.npy"]:
                     self.mmaps[name].flush()
 
         if _should_log_step(step, self.cfg.effective_rounds):
@@ -246,21 +221,17 @@ class ResultTracker:
 
         if len(self.validation_steps) > 0:
             eval_idx = (self.cfg.effective_rounds // self.cfg.evaluation.evaluation_delta)
-            last_accs = self.mmaps["validation_accuracies.npy"][eval_idx]
+            last_accs = self.mmaps["local_accuracy.npy"][eval_idx]
             # Replace NaNs with infinity for min finding
             last_accs_clean = np.where(np.isnan(last_accs), np.inf, last_accs)
             worst_idx = np.argmin(last_accs_clean)
-
-            for i, s in enumerate(self.validation_steps):
-                acc = self.mmaps["validation_accuracies.npy"][i, worst_idx]
-                store_result(self.fd_validation_worst, s, acc)
+            logger.info(f"Final Worst Local Client Accuracy: {last_accs[worst_idx]:.4f}")
 
         if self.cfg.evaluation.evaluate_test and self.test_loader:
-            fd_test = (self.result_dir / "test").open("w")
-            make_result_file(fd_test, ["Step number", "Cross-accuracy"])
             accs = [w.compute_accuracy_on_loader(self.test_loader) for w in honest_workers]
-            store_result(fd_test, self.cfg.effective_rounds, sum(accs) / len(accs))
-            fd_test.close()
+            global_acc_arr = np.array(accs, dtype="float32")
+            np.save(self.result_dir / "global_accuracy.npy", global_acc_arr)
+            logger.info(f"Final Mean Global Accuracy: {np.mean(global_acc_arr):.4f}")
 
         self.save_snapshot()
         with torch.no_grad():
