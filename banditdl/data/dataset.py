@@ -248,4 +248,20 @@ def make_train_validation_test_datasets(
     global_test_subset, batch_size=test_batch, shuffle=False
   )
 
-  return train_loaders, local_test_loaders, global_test_loader, distribution_stats
+  # Create a subsampled global test set for periodic tracking (matched to local test size).
+  # We use the first worker's local test size as the benchmark.
+  sub_indices = global_test_indices
+  if honest_workers > 0:
+    first_worker_id = 0
+    # Average number of samples per worker in local test
+    n_sub = int(total * (1 - global_test_ratio) / honest_workers * local_test_ratio)
+    n_sub = max(1, min(n_sub, len(global_test_indices)))
+    sub_indices = global_test_indices[:n_sub]
+  
+  global_test_subsampled_loader = torch.utils.data.DataLoader(
+    torch.utils.data.Subset(full_train_dataset, sub_indices),
+    batch_size=test_batch,
+    shuffle=False
+  )
+
+  return train_loaders, local_test_loaders, global_test_loader, global_test_subsampled_loader, distribution_stats

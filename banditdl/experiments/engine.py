@@ -87,8 +87,8 @@ def _raise_if_nonfinite_weights(honest_workers, current_step: int) -> None:
 class ResultTracker:
     """Consolidates metrics tracking, evaluation, and saving results."""
 
-    def __init__(self, cfg: BanditDLConfig, result_dir: pathlib.Path, test_loader=None):
-        self.cfg, self.result_dir, self.test_loader = cfg, result_dir, test_loader
+    def __init__(self, cfg: BanditDLConfig, result_dir: pathlib.Path, test_loader=None, test_loader_sub=None):
+        self.cfg, self.result_dir, self.test_loader, self.test_loader_sub = cfg, result_dir, test_loader, test_loader_sub
         self.result_dir.mkdir(parents=True, exist_ok=True)
         self.validation_steps = []
 
@@ -100,6 +100,7 @@ class ResultTracker:
         mmap_configs = {
             "local_accuracy.npy": (nb_evals, cfg.nb_honests),
             "local_loss.npy": (nb_evals, cfg.nb_honests),
+            "global_accuracy.npy": (nb_evals, cfg.nb_honests),  # Periodic subsampled eval
             "train_loss.npy": (nb_evals, cfg.nb_honests),
             "neighbor_disagreement.npy": (cfg.effective_rounds, cfg.nb_honests),
             "consensus_drift.npy": (cfg.effective_rounds, cfg.nb_honests),
@@ -155,11 +156,17 @@ class ResultTracker:
             self.mmaps["local_loss.npy"][eval_idx] = np.array(v_losses, dtype="float32")
             self.mmaps["train_loss.npy"][eval_idx] = np.array(t_losses, dtype="float32")
 
+            # Periodic Global Generalization (Subsampled)
+            if self.test_loader_sub:
+                g_accs = [w.compute_accuracy_on_loader(self.test_loader_sub) for w in honest_workers]
+                self.mmaps["global_accuracy.npy"][eval_idx] = np.array(g_accs, dtype="float32")
+                logger.info(f"Step {step} | Mean Local Acc: {sum(accs)/len(accs):.4f} | Mean Global Acc (sub): {sum(g_accs)/len(g_accs):.4f}")
+
             mean_acc, mean_v, mean_t = sum(accs) / len(accs), sum(v_losses) / len(v_losses), sum(t_losses) / len(t_losses)
             self.validation_steps.append(step)
 
             if eval_idx % 5 == 0:
-                for name in ["local_accuracy.npy", "local_loss.npy", "train_loss.npy"]:
+                for name in ["local_accuracy.npy", "local_loss.npy", "train_loss.npy", "global_accuracy.npy"]:
                     self.mmaps[name].flush()
 
         if _should_log_step(step, self.cfg.effective_rounds):
@@ -393,7 +400,7 @@ def run_experiment(
 ) -> None:
     _setup_seed(seed)
     _log_start(cfg, result_dir)
-    train_dict, local_test_dict, test_loader, dist_stats = (
+    train_dict, local_test_dict, test_loader, test_loader_sub, dist_stats = (
         dataset.make_train_validation_test_datasets(
             cfg.dataset.dataset,
             numb_labels=cfg.dataset.numb_labels,
@@ -418,11 +425,11 @@ def run_experiment(
     bw_cfg = _build_worker_config(cfg, device)
     byz_workers = [
         ByzantineWorker(i, honest_workers[0].model_size, bw_cfg)
-        for i in range(cfg.nb_honests, cfg.topology.nodes)
+        for i in range(cfg.nb_honests, cfg.total_nodes)
     ]
     byz_by_id = {byz.worker_id: byz for byz in byz_workers}
 
-    with ResultTracker(cfg, result_dir, test_loader) as tracker:
+    with ResultTracker(cfg, result_dir, test_loader, test_loader_sub) as tracker:
         tracker.save_audit(
             {
                 "partition": {
