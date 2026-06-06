@@ -121,18 +121,16 @@ def _record_final_evaluation_if_needed(
     validation_losses,
     train_losses,
 ):
-    evaluation_delta = getattr(getattr(cfg, "evaluation", cfg), "evaluation_delta")
-    rounds = cfg.effective_rounds if hasattr(cfg, "effective_rounds") else cfg.rounds
-    if evaluation_delta <= 0:
+    if cfg.evaluation.evaluation_delta <= 0:
         return None, None, None
-    if validation_steps and validation_steps[-1] == rounds:
+    if validation_steps and validation_steps[-1] == cfg.effective_rounds:
         return None, None, None
     return _record_evaluation(
         workers,
         fd_validation,
         fd_validation_loss,
         fd_train_loss,
-        rounds,
+        cfg.effective_rounds,
         validation_steps,
         validation_accuracies,
         validation_losses,
@@ -167,6 +165,26 @@ class ResultTracker:
         self.consensus_drift_history = []
         self.gradient_norm_history = []
 
+        # Reward and neighbor history for dynamic mode
+        self.algorithm_reward_history = []
+        self.oracle_reward_history = []
+        self.selected_neighbor_history = []
+        self.oracle_neighbor_history = []
+        self.reward_min_history = []
+        self.reward_max_history = []
+
+        # Progressive saving for the large probability tensor
+        self.prob_file = result_dir / "sampler_probabilities.npy"
+        self.probs_mmap = None
+        if cfg.topology.sampling is not None:
+            # Pre-allocate T x N x N tensor
+            self.probs_mmap = np.memmap(
+                self.prob_file,
+                dtype="float32",
+                mode="w+",
+                shape=(cfg.effective_rounds, cfg.topology.nodes, cfg.topology.nodes),
+            )
+
     def __enter__(self):
         return self
 
@@ -175,6 +193,14 @@ class ResultTracker:
         self.fd_validation_worst.close()
         self.fd_validation_loss.close()
         self.fd_train_loss.close()
+        if self.probs_mmap is not None:
+            self.probs_mmap.flush()
+
+    def save_audit(self, audit_data: dict):
+        """Save a detailed audit manifest of the experiment initial state."""
+        import json
+        with open(self.result_dir / "audit.json", "w") as f:
+            json.dump(audit_data, f, indent=2)
 
     def evaluate_step(self, current_step, workers, mode):
         mean_acc = None
@@ -218,13 +244,43 @@ class ResultTracker:
         self.neighbor_disagreement_history.append(disagreement.cpu().numpy())
         self.consensus_drift_history.append(consensus.cpu().numpy())
 
+    def record_probabilities(self, current_step, workers):
+        """Log raw node probabilities to the memmapped file."""
+        if self.probs_mmap is not None and current_step < self.cfg.effective_rounds:
+            probs = np.stack([_full_sampler_probability_vector(w, self.cfg.topology.nodes) for w in workers])
+            self.probs_mmap[current_step, :, :] = probs.astype("float32")
+            if current_step % 10 == 0:
+                self.probs_mmap.flush()
+
+    def record_rewards(self, algorithm_rewards, oracle_rewards, selected_neighbors, oracle_neighbors, reward_min, reward_max):
+        """Record reward and neighbor statistics for the current round."""
+        self.algorithm_reward_history.append(algorithm_rewards.copy())
+        self.oracle_reward_history.append(np.array(oracle_rewards))
+        self.selected_neighbor_history.append(selected_neighbors.copy())
+        self.oracle_neighbor_history.append(np.stack(oracle_neighbors))
+        self.reward_min_history.append(reward_min.copy())
+        self.reward_max_history.append(reward_max.copy())
+
     def save_snapshot(self):
+        """Save a snapshot of all currently collected metrics to disk."""
         np.save(self.result_dir / "validation_accuracies.npy", np.array(self.validation_accuracies))
         np.save(self.result_dir / "validation_losses.npy", np.array(self.validation_losses))
         np.save(self.result_dir / "train_losses.npy", np.array(self.train_losses))
         np.save(self.result_dir / "neighbor_disagreement.npy", np.array(self.neighbor_disagreement_history))
         np.save(self.result_dir / "consensus_drift.npy", np.array(self.consensus_drift_history))
         np.save(self.result_dir / "gradient_norms.npy", np.array(self.gradient_norm_history))
+
+        if self.algorithm_reward_history:
+            np.save(self.result_dir / "reward_algorithm.npy", np.array(self.algorithm_reward_history))
+            np.save(self.result_dir / "reward_oracle.npy", np.array(self.oracle_reward_history))
+            np.save(self.result_dir / "reward_selected_min.npy", np.array(self.reward_min_history))
+            np.save(self.result_dir / "reward_selected_max.npy", np.array(self.reward_max_history))
+            np.save(self.result_dir / "selected_neighbors.npy", np.array(self.selected_neighbor_history, dtype=int))
+            np.save(self.result_dir / "oracle_neighbors.npy", np.array(self.oracle_neighbor_history, dtype=int))
+
+            alg = np.array(self.algorithm_reward_history)
+            ora = np.array(self.oracle_reward_history)
+            np.save(self.result_dir / "regret.npy", ora - alg)
 
     def finalize(self, workers, mode):
         final_accuracy, final_val_loss, final_train_loss = _record_final_evaluation_if_needed(
@@ -349,29 +405,6 @@ def _mean_selected_reward(rewards) -> float:
     return float(sum(rewards) / len(rewards))
 
 
-def _save_dynamic_metrics(
-    result_dir: pathlib.Path,
-    *,
-    algorithm_reward_history,
-    oracle_reward_history,
-    reward_min_history,
-    reward_max_history,
-    selected_neighbor_history,
-    oracle_neighbor_history,
-    sampler_probability_history,
-) -> None:
-    algorithm_rewards = np.array(algorithm_reward_history)
-    oracle_rewards = np.array(oracle_reward_history)
-    np.save(result_dir / "reward_algorithm.npy", algorithm_rewards)
-    np.save(result_dir / "reward_oracle.npy", oracle_rewards)
-    np.save(result_dir / "regret.npy", oracle_rewards - algorithm_rewards)
-    np.save(result_dir / "reward_selected_min.npy", np.array(reward_min_history))
-    np.save(result_dir / "reward_selected_max.npy", np.array(reward_max_history))
-    np.save(result_dir / "selected_neighbors.npy", np.array(selected_neighbor_history, dtype=int))
-    np.save(result_dir / "oracle_neighbors.npy", np.array(oracle_neighbor_history, dtype=int))
-    np.save(result_dir / "sampler_probabilities.npy", np.array(sampler_probability_history))
-
-
 def _dynamic_candidate_weights(w, honest_weights, byz_workers, current_step):
     candidate_weights = {
         worker_id: weight
@@ -402,29 +435,27 @@ def _run_experiment(cfg: BanditDLConfig, result_dir: pathlib.Path, seed: int, de
     _setup_seed(seed)
     _log_start(mode, cfg, result_dir)
 
-    train_loader_dict, local_test_loader_dict, test_loader = dataset.make_train_validation_test_datasets(
+    train_loader_dict, local_test_loader_dict, test_loader, distribution_stats = dataset.make_train_validation_test_datasets(
         cfg.dataset.dataset,
-        heterogeneity=cfg.heterogeneity.method != "iid", # Simplified hetero check
+        heterogeneity=cfg.heterogeneity.method == "legacy",
         numb_labels=cfg.dataset.numb_labels,
         alpha_dirichlet=cfg.heterogeneity.alpha,
         distinct_datasets=cfg.dataset.mode == "writer_per_node",
-        nb_datapoints=None, # Could be added to config if needed
+        nb_datapoints=None,
         honest_workers=cfg.nb_honests,
         train_batch=cfg.optimization.batch_size,
-        test_batch=100, # Batch size test
+        test_batch=100,
         global_test_ratio=cfg.evaluation.global_test_ratio,
         local_test_ratio=cfg.evaluation.local_test_ratio,
         split_seed=cfg.evaluation.split_seed,
         partition_method=cfg.heterogeneity.method,
-        partition_style=cfg.heterogeneity.partition,
-        classes_per_worker=cfg.heterogeneity.classes_per_worker,
-        nb_shards=cfg.heterogeneity.nb_shards,
-        shards_per_worker=cfg.heterogeneity.shards_per_worker,
-        nb_groups=cfg.heterogeneity.nb_groups,
+        partition_style=None,
+        classes_per_worker=None,
+        nb_shards=None,
+        shards_per_worker=None,
+        clusters=cfg.heterogeneity.clusters,
         classes_per_group=cfg.heterogeneity.classes_per_group,
         group_overlap=cfg.heterogeneity.group_overlap,
-        dataset_mode=cfg.dataset.mode,
-        nb_writers_limit=cfg.dataset.nb_writers_limit,
     )
 
     comm_graph = None
@@ -442,16 +473,23 @@ def _run_experiment(cfg: BanditDLConfig, result_dir: pathlib.Path, seed: int, de
         base_worker_config = replace(base_worker_config, comm_graph=comm_graph)
 
     byz_workers = [ByzantineWorker(i, workers[0].model_size, base_worker_config) for i in range(cfg.nb_honests, cfg.topology.nodes)]
-
     byz_workers_by_id = {byz.worker_id: byz for byz in byz_workers}
     dec_byz_workers = {i: DecByzantineWorker(i, cfg.nb_honests, base_worker_config) for i in range(cfg.nb_honests, cfg.topology.nodes)} if mode == "fixed" else {}
 
     with ResultTracker(cfg, result_dir, test_loader) as tracker:
+        # Save initial audit state
+        tracker.save_audit({
+            "distribution": distribution_stats,
+            "topology": {
+                "mode": mode,
+                "nodes": cfg.topology.nodes,
+                "honests": cfg.nb_honests,
+                "byzantines": cfg.adversary.byzcount
+            }
+        })
+
         cumulative_arm_rewards = np.zeros((cfg.nb_honests, cfg.topology.nodes))
         cumulative_algorithm_rewards = np.zeros(cfg.nb_honests)
-        algorithm_reward_history, oracle_reward_history, selected_neighbor_history, oracle_neighbor_history = [], [], [], []
-        sampler_probability_history = []
-        reward_min_history, reward_max_history = [], []
 
         for current_step in range(cfg.effective_rounds + 1):
             tracker.evaluate_step(current_step, workers, mode)
@@ -460,13 +498,11 @@ def _run_experiment(cfg: BanditDLConfig, result_dir: pathlib.Path, seed: int, de
                 for w in workers:
                     w.train()
                 tracker.record_gradient_norms(workers)
+                tracker.record_probabilities(current_step, workers)
                 honest_weights = [w.pull(None) for w in workers]
 
                 if mode == "dynamic":
                     selected_round = np.full((cfg.nb_honests, workers[0].nb_neighbors), -1, dtype=int)
-                    probability_round = np.stack(
-                        [_full_sampler_probability_vector(w, cfg.topology.nodes) for w in workers],
-                    )
                     reward_min_round, reward_max_round = np.full(cfg.nb_honests, np.nan), np.full(cfg.nb_honests, np.nan)
 
                     for w in workers:
@@ -496,35 +532,26 @@ def _run_experiment(cfg: BanditDLConfig, result_dir: pathlib.Path, seed: int, de
                         w.observe_neighbors(selected_ids, neighbor_weights)
                         w.aggregate(neighbor_weights)
 
-                    sampler_probability_history.append(probability_round)
-                    reward_min_history.append(reward_min_round)
-                    reward_max_history.append(reward_max_round)
-
                     oracle_neighbors_round, oracle_rewards_round = [], []
                     for w in workers:
                         oids, oreward = _best_fixed_subset(cumulative_arm_rewards[w.worker_id], worker_id=w.worker_id, k=w.nb_neighbors)
                         oracle_neighbors_round.append(oids)
                         oracle_rewards_round.append(oreward)
-                    algorithm_reward_history.append(cumulative_algorithm_rewards.copy())
-                    oracle_reward_history.append(np.array(oracle_rewards_round))
-                    selected_neighbor_history.append(selected_round)
-                    oracle_neighbor_history.append(np.stack(oracle_neighbors_round))
+
+                    tracker.record_rewards(
+                        cumulative_algorithm_rewards,
+                        oracle_rewards_round,
+                        selected_round,
+                        oracle_neighbors_round,
+                        reward_min_round,
+                        reward_max_round,
+                    )
 
                     with torch.no_grad():
                         updated = [w.pull(None) for w in workers]
                         neighbor_matrix = selected_round.copy()
                         neighbor_matrix[neighbor_matrix >= cfg.nb_honests] = -1
                         tracker.record_drift(neighbor_disagreement(updated, neighbor_indices=neighbor_matrix.tolist()), consensus_drift(updated))
-                    _save_dynamic_metrics(
-                        result_dir,
-                        algorithm_reward_history=algorithm_reward_history,
-                        oracle_reward_history=oracle_reward_history,
-                        reward_min_history=reward_min_history,
-                        reward_max_history=reward_max_history,
-                        selected_neighbor_history=selected_neighbor_history,
-                        oracle_neighbor_history=oracle_neighbor_history,
-                        sampler_probability_history=sampler_probability_history,
-                    )
                 else:
                     # Fixed mode
                     for w in workers:
@@ -543,21 +570,11 @@ def _run_experiment(cfg: BanditDLConfig, result_dir: pathlib.Path, seed: int, de
                         updated = [w.pull(None) for w in workers]
                         tracker.record_drift(neighbor_disagreement(updated, adjacency=adjacency_honest), consensus_drift(updated))
 
-                tracker.save_snapshot()
                 _raise_if_nonfinite_weights(workers, current_step, mode)
+                if current_step % 10 == 0:
+                    tracker.save_snapshot()
 
         tracker.finalize(workers, mode)
-    if mode == "dynamic":
-        _save_dynamic_metrics(
-            result_dir,
-            algorithm_reward_history=algorithm_reward_history,
-            oracle_reward_history=oracle_reward_history,
-            reward_min_history=reward_min_history,
-            reward_max_history=reward_max_history,
-            selected_neighbor_history=selected_neighbor_history,
-            oracle_neighbor_history=oracle_neighbor_history,
-            sampler_probability_history=sampler_probability_history,
-        )
 
 
 def run_dynamic(cfg: BanditDLConfig, result_dir: pathlib.Path, seed: int, device: str) -> None:
