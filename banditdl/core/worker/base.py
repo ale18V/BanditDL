@@ -24,21 +24,16 @@ class BaseWorker(ABC):
         """Consume received weights and update local state."""
 
     @abstractmethod
-    def pull(self, context) -> torch.Tensor:
+    def pull(self) -> torch.Tensor:
         """Return weights/message to neighbors, optionally using context."""
 
-    @abstractmethod
-    def compute_validation_accuracy(self):
-        """Return worker validation accuracy when meaningful, else None."""
+
+class ByzantineWorker(BaseWorker):
+    """Shared API for Byzantine workers"""
 
     @abstractmethod
-    def compute_validation_loss(self):
-        """Return worker validation loss when meaningful, else None."""
-
-    @abstractmethod
-    def compute_train_loss(self):
-        """Return worker train loss when meaningful, else None."""
-
+    def inform(self, context):
+        """Receive information from the engine to inform Byzantine behavior."""
 
 class HonestWorker(BaseWorker):
     """Shared training logic for honest decentralized workers."""

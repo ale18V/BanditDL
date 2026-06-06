@@ -35,6 +35,7 @@ class ByzantineWorker(BaseWorker):
             config.gradient_clip,
             robust_aggregator,
         )
+        self.cached_vector = None
 
     def train(self) -> None:
         return None
@@ -42,15 +43,15 @@ class ByzantineWorker(BaseWorker):
     def aggregate(self, weights) -> None:
         return None
 
-    def pull(self, context):
-        if context is None:
-            return None
-        honest_vectors = context.get("honest_weights", [])
-        current_step = context.get("step", 0)
+    def inform(self, honest_weights, step):
+        """Compute and cache the byzantine vector once per round."""
         vectors = self.byzantine_attack.generate_byzantine_vectors(
-            honest_vectors, None, current_step
+            honest_weights, None, step
         )
-        return vectors[0] if len(vectors) > 0 else None
+        self.cached_vector = vectors[0] if len(vectors) > 0 else None
+
+    def pull(self, context=None):
+        return self.cached_vector
 
     def compute_validation_accuracy(self):
         return None

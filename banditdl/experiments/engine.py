@@ -8,6 +8,7 @@ import random
 from dataclasses import replace
 
 import numpy as np
+import numpy.lib.format
 import torch
 
 from banditdl.core.sampling import (
@@ -74,72 +75,13 @@ def _log_done() -> None:
     print("[banditdl] finished run", flush=True)
 
 
-def _raise_if_nonfinite_weights(workers, current_step: int) -> None:
-    for worker in workers:
+def _raise_if_nonfinite_weights(honest_workers, current_step: int) -> None:
+    for worker in honest_workers:
         weights = worker.pull(None)
         if not torch.isfinite(weights).all():
             raise FloatingPointError(
                 f"produced non-finite weights at round {current_step} for worker {worker.worker_id}"
             )
-
-
-def _record_evaluation(
-    workers,
-    fd_val,
-    fd_val_loss,
-    fd_train_loss,
-    step,
-    val_steps,
-    val_accs,
-    val_losses,
-    train_losses,
-):
-    accs = [w.compute_validation_accuracy() for w in workers]
-    v_losses = [w.compute_validation_loss() for w in workers]
-    t_losses = [w.compute_train_loss() for w in workers]
-    mean_acc = sum(accs) / len(accs)
-    mean_v = sum(v_losses) / len(v_losses)
-    mean_t = sum(t_losses) / len(t_losses)
-
-    val_steps.append(step)
-    val_accs.append(accs)
-    val_losses.append(v_losses)
-    train_losses.append(t_losses)
-    store_result(fd_val, step, mean_acc)
-    store_result(fd_val_loss, step, mean_v)
-    store_result(fd_train_loss, step, mean_t)
-
-    return mean_acc, mean_v, mean_t
-
-
-def _record_final_evaluation_if_needed(
-    cfg: BanditDLConfig,
-    workers,
-    fd_val,
-    fd_v_loss,
-    fd_t_loss,
-    v_steps,
-    v_accs,
-    v_losses,
-    t_losses,
-):
-    evaluation = getattr(cfg, "evaluation", cfg)
-    rounds = cfg.effective_rounds if hasattr(cfg, "effective_rounds") else cfg.rounds
-    if evaluation.evaluation_delta <= 0:
-        return None, None, None
-    if v_steps and v_steps[-1] == rounds:
-        return None, None, None
-    return _record_evaluation(
-        workers,
-        fd_val,
-        fd_v_loss,
-        fd_t_loss,
-        rounds,
-        v_steps,
-        v_accs,
-        v_losses,
-        t_losses,
-    )
 
 
 class ResultTracker:
@@ -161,10 +103,27 @@ class ResultTracker:
         ]:
             make_result_file(fd, fields)
 
-        self.validation_steps, self.validation_accuracies = [], []
-        self.validation_losses, self.train_losses = [], []
-        self.neighbor_disagreement_history, self.consensus_drift_history = [], []
-        self.gradient_norm_history = []
+        self.validation_steps = []
+
+        # Progressive saving for all metrics
+        self.mmaps = {}
+        delta = cfg.evaluation.evaluation_delta
+        nb_evals = (cfg.effective_rounds // delta) + 1 if delta > 0 else 1
+
+        mmap_configs = {
+            "validation_accuracies.npy": (nb_evals, cfg.nb_honests),
+            "validation_losses.npy": (nb_evals, cfg.nb_honests),
+            "train_losses.npy": (nb_evals, cfg.nb_honests),
+            "neighbor_disagreement.npy": (cfg.effective_rounds, cfg.nb_honests),
+            "consensus_drift.npy": (cfg.effective_rounds, cfg.nb_honests),
+            "gradient_norms.npy": (cfg.effective_rounds, cfg.nb_honests),
+        }
+
+        for name, shape in mmap_configs.items():
+            path = result_dir / name
+            mmap = numpy.lib.format.open_memmap(path, dtype="float32", mode="w+", shape=shape)
+            mmap[:] = np.nan
+            self.mmaps[name] = mmap
 
         self.algorithm_reward_history, self.oracle_reward_history = [], []
         self.selected_neighbor_history, self.oracle_neighbor_history = [], []
@@ -173,8 +132,6 @@ class ResultTracker:
         self.prob_file = result_dir / "sampler_probabilities.npy"
         self.probs_mmap = None
         if cfg.effective_rounds > 0:
-            import numpy.lib.format
-
             self.probs_mmap = numpy.lib.format.open_memmap(
                 self.prob_file,
                 dtype="float32",
@@ -197,6 +154,8 @@ class ResultTracker:
             self.fd_train_loss,
         ]:
             fd.close()
+        for mmap in self.mmaps.values():
+            mmap.flush()
         if self.probs_mmap is not None:
             self.probs_mmap.flush()
 
@@ -204,41 +163,51 @@ class ResultTracker:
         with (self.result_dir / "audit.json").open("w") as f:
             json.dump(audit_data, f, indent=2)
 
-    def evaluate_step(self, step, workers, mode):
+    def evaluate_step(self, step, honest_workers):
         mean_acc, mean_v, mean_t = None, None, None
-        if (
-            self.cfg.evaluation.evaluation_delta > 0
-            and step % self.cfg.evaluation.evaluation_delta == 0
-        ):
-            mean_acc, mean_v, mean_t = _record_evaluation(
-                workers,
-                self.fd_validation,
-                self.fd_validation_loss,
-                self.fd_train_loss,
-                step,
-                self.validation_steps,
-                self.validation_accuracies,
-                self.validation_losses,
-                self.train_losses,
-            )
+        delta = self.cfg.evaluation.evaluation_delta
+        if delta > 0 and step % delta == 0:
+            eval_idx = step // delta
+            accs = [w.compute_validation_accuracy() for w in honest_workers]
+            v_losses = [w.compute_validation_loss() for w in honest_workers]
+            t_losses = [w.compute_train_loss() for w in honest_workers]
+
+            self.mmaps["validation_accuracies.npy"][eval_idx] = np.array(accs, dtype="float32")
+            self.mmaps["validation_losses.npy"][eval_idx] = np.array(v_losses, dtype="float32")
+            self.mmaps["train_losses.npy"][eval_idx] = np.array(t_losses, dtype="float32")
+
+            mean_acc, mean_v, mean_t = sum(accs) / len(accs), sum(v_losses) / len(v_losses), sum(t_losses) / len(t_losses)
+            self.validation_steps.append(step)
+
+            store_result(self.fd_validation, step, mean_acc)
+            store_result(self.fd_validation_loss, step, mean_v)
+            store_result(self.fd_train_loss, step, mean_t)
+
+            if eval_idx % 5 == 0:
+                for name in ["validation_accuracies.npy", "validation_losses.npy", "train_losses.npy"]:
+                    self.mmaps[name].flush()
+
         if _should_log_step(step, self.cfg.effective_rounds):
             _log_progress(step, self.cfg, mean_acc, mean_v, mean_t)
         return mean_acc, mean_v, mean_t
 
-    def record_gradient_norms(self, workers):
+    def record_gradient_norms(self, step, honest_workers):
         """Record the gradient norm for each worker."""
-        self.gradient_norm_history.append(
-            np.array([w.last_gradient_norm for w in workers], dtype=float)
-        )
+        if step < self.cfg.effective_rounds:
+            norms = [w.last_gradient_norm for w in honest_workers]
+            self.mmaps["gradient_norms.npy"][step] = np.array(norms, dtype="float32")
 
-    def record_drift(self, disagreement, consensus):
-        self.neighbor_disagreement_history.append(disagreement.cpu().numpy())
-        self.consensus_drift_history.append(consensus.cpu().numpy())
+    def record_drift(self, step, disagreement, consensus):
+        if step < self.cfg.effective_rounds:
+            dis_val = disagreement.cpu().numpy().astype("float32")
+            con_val = consensus.cpu().numpy().astype("float32")
+            self.mmaps["neighbor_disagreement.npy"][step] = dis_val
+            self.mmaps["consensus_drift.npy"][step] = con_val
 
-    def record_probabilities(self, step, workers):
+    def record_probabilities(self, step, honest_workers):
         if self.probs_mmap is not None and step < self.cfg.effective_rounds:
             probs = np.stack(
-                [_full_sampler_probability_vector(w, self.cfg.topology.nodes) for w in workers]
+                [_full_sampler_probability_vector(w, self.cfg.topology.nodes) for w in honest_workers]
             )
             self.probs_mmap[step] = probs.astype("float32")
             if step % 10 == 0:
@@ -253,56 +222,49 @@ class ResultTracker:
         self.reward_max_history.append(r_max.copy())
 
     def save_snapshot(self):
+        """Flush all mmaps and save dynamic reward histories."""
+        for mmap in self.mmaps.values():
+            mmap.flush()
+        if self.probs_mmap is not None:
+            self.probs_mmap.flush()
+
         d = self.result_dir
-        _atomic_save(d / "validation_accuracies.npy", self.validation_accuracies)
-        _atomic_save(d / "validation_losses.npy", self.validation_losses)
-        _atomic_save(d / "train_losses.npy", self.train_losses)
-        _atomic_save(d / "neighbor_disagreement.npy", self.neighbor_disagreement_history)
-        _atomic_save(d / "consensus_drift.npy", self.consensus_drift_history)
-        _atomic_save(d / "gradient_norms.npy", self.gradient_norm_history)
         if self.algorithm_reward_history:
             _atomic_save(d / "reward_algorithm.npy", self.algorithm_reward_history)
             _atomic_save(d / "reward_oracle.npy", self.oracle_reward_history)
             _atomic_save(d / "reward_selected_min.npy", self.reward_min_history)
             _atomic_save(d / "reward_selected_max.npy", self.reward_max_history)
-            _atomic_save(
-                d / "selected_neighbors.npy",
-                self.selected_neighbor_history,
-                dtype=int,
-            )
-            _atomic_save(
-                d / "oracle_neighbors.npy",
-                self.oracle_neighbor_history,
-                dtype=int,
-            )
+            _atomic_save(d / "selected_neighbors.npy", self.selected_neighbor_history, dtype=int)
+            _atomic_save(d / "oracle_neighbors.npy", self.oracle_neighbor_history, dtype=int)
+
             regret = np.array(self.oracle_reward_history) - np.array(self.algorithm_reward_history)
             _atomic_save(d / "regret.npy", regret)
 
-    def finalize(self, workers):
-        _record_final_evaluation_if_needed(
-            self.cfg,
-            workers,
-            self.fd_validation,
-            self.fd_validation_loss,
-            self.fd_train_loss,
-            self.validation_steps,
-            self.validation_accuracies,
-            self.validation_losses,
-            self.train_losses,
-        )
-        if self.validation_accuracies:
-            worst_idx = min(range(len(workers)), key=lambda i: self.validation_accuracies[-1][i])
-            for s, a in zip(self.validation_steps, self.validation_accuracies, strict=True):
-                store_result(self.fd_validation_worst, s, a[worst_idx])
+    def finalize(self, honest_workers):
+        # Ensure final evaluation is recorded
+        self.evaluate_step(self.cfg.effective_rounds, honest_workers)
+
+        if len(self.validation_steps) > 0:
+            eval_idx = (self.cfg.effective_rounds // self.cfg.evaluation.evaluation_delta)
+            last_accs = self.mmaps["validation_accuracies.npy"][eval_idx]
+            # Replace NaNs with infinity for min finding
+            last_accs_clean = np.where(np.isnan(last_accs), np.inf, last_accs)
+            worst_idx = np.argmin(last_accs_clean)
+
+            for i, s in enumerate(self.validation_steps):
+                acc = self.mmaps["validation_accuracies.npy"][i, worst_idx]
+                store_result(self.fd_validation_worst, s, acc)
+
         if self.cfg.evaluation.evaluate_test and self.test_loader:
             fd_test = (self.result_dir / "test").open("w")
             make_result_file(fd_test, ["Step number", "Cross-accuracy"])
-            accs = [w.compute_accuracy_on_loader(self.test_loader) for w in workers]
+            accs = [w.compute_accuracy_on_loader(self.test_loader) for w in honest_workers]
             store_result(fd_test, self.cfg.effective_rounds, sum(accs) / len(accs))
             fd_test.close()
+
         self.save_snapshot()
         with torch.no_grad():
-            weights = torch.stack([w.pull(None) for w in workers])
+            weights = torch.stack([w.pull(None) for w in honest_workers])
             dist = torch.cdist(weights, weights).cpu().numpy()
         np.save(self.result_dir / "pairwise_model_distance_final.npy", dist)
         _log_done()
@@ -387,12 +349,12 @@ def _mean_selected_reward(rewards) -> float:
     return float(sum(rewards) / len(rewards)) if rewards else 0.0
 
 
-def _dynamic_candidate_weights(w, honest_weights, byz_workers, step):
+def _dynamic_candidate_weights(w, honest_weights, byz_by_id):
     weights = {i: weight for i, weight in enumerate(honest_weights) if i != w.worker_id}
-    for byz in byz_workers:
-        weight = copy.deepcopy(byz).pull({"honest_weights": honest_weights, "step": step})
+    for byz_id, byz in byz_by_id.items():
+        weight = byz.pull()
         if weight is not None:
-            weights[byz.worker_id] = weight
+            weights[byz_id] = weight
     return weights
 
 
@@ -406,20 +368,15 @@ def _full_sampler_probability_vector(worker, nb_total: int) -> np.ndarray:
 
 
 def _step_dynamic(
-    step, cfg, workers, byz_workers, byz_by_id, honest_weights, cum_arm_r, cum_alg_r, tracker
+    step, cfg, honest_workers, byz_by_id, h_weights, cum_arm_r, cum_alg_r, tracker
 ):
-    selected_round = np.full((cfg.nb_honests, workers[0].nb_neighbors), -1, dtype=int)
+    selected_round = np.full((cfg.nb_honests, honest_workers[0].nb_neighbors), -1, dtype=int)
     r_min_round, r_max_round = np.full(cfg.nb_honests, np.nan), np.full(cfg.nb_honests, np.nan)
 
-    for w in workers:
+    for w in honest_workers:
         neighbor_indices = w._sample_neighbors()
-        c_weights = _dynamic_candidate_weights(w, honest_weights, byz_workers, step)
+        c_weights = _dynamic_candidate_weights(w, h_weights, byz_by_id)
         sel_ids = [i for i in neighbor_indices if i in c_weights]
-        for nid in sel_ids:
-            if nid >= cfg.nb_honests:
-                weight = byz_by_id[nid].pull({"honest_weights": honest_weights, "step": step})
-                if weight is not None:
-                    c_weights[nid] = weight
 
         candidate_ids = list(c_weights)
         c_rewards = w.reward_strategy.score(w.pull(None), [c_weights[i] for i in candidate_ids])
@@ -438,7 +395,7 @@ def _step_dynamic(
         w.aggregate(n_weights)
 
     ora_n_round, ora_r_round = [], []
-    for w in workers:
+    for w in honest_workers:
         oids, oreward = _best_fixed_subset(cum_arm_r[w.worker_id], w.worker_id, w.nb_neighbors)
         ora_n_round.append(oids)
         ora_r_round.append(oreward)
@@ -447,10 +404,11 @@ def _step_dynamic(
         cum_alg_r, ora_r_round, selected_round, ora_n_round, r_min_round, r_max_round
     )
     with torch.no_grad():
-        updated = [w.pull(None) for w in workers]
+        updated = [w.pull(None) for w in honest_workers]
         n_matrix = selected_round.copy()
         n_matrix[n_matrix >= cfg.nb_honests] = -1
         tracker.record_drift(
+            step,
             neighbor_disagreement(updated, neighbor_indices=n_matrix.tolist()),
             consensus_drift(updated),
         )
@@ -485,10 +443,10 @@ def run_experiment(
         )
     )
 
-    workers = _init_workers(cfg, train_dict, local_test_dict, device)
+    honest_workers = _init_workers(cfg, train_dict, local_test_dict, device)
     bw_cfg = _build_worker_config(cfg, device)
     byz_workers = [
-        ByzantineWorker(i, workers[0].model_size, bw_cfg)
+        ByzantineWorker(i, honest_workers[0].model_size, bw_cfg)
         for i in range(cfg.nb_honests, cfg.topology.nodes)
     ]
     byz_by_id = {byz.worker_id: byz for byz in byz_workers}
@@ -520,25 +478,29 @@ def run_experiment(
         )
 
         for step in range(cfg.effective_rounds + 1):
-            tracker.evaluate_step(step, workers, "dynamic")
+            tracker.evaluate_step(step, honest_workers)
             if step < cfg.effective_rounds:
-                for w in workers:
+                for w in honest_workers:
                     w.train()
-                tracker.record_gradient_norms(workers)
-                tracker.record_probabilities(step, workers)
-                h_weights = [w.pull(None) for w in workers]
+                tracker.record_gradient_norms(step, honest_workers)
+                tracker.record_probabilities(step, honest_workers)
+                h_weights = [w.pull(None) for w in honest_workers]
+
+                # Inform Byzantines once per round
+                for byz in byz_workers:
+                    byz.inform(h_weights, step)
+
                 _step_dynamic(
                     step,
                     cfg,
-                    workers,
-                    byz_workers,
+                    honest_workers,
                     byz_by_id,
                     h_weights,
                     cum_arm_r,
                     cum_alg_r,
                     tracker,
                 )
-                _raise_if_nonfinite_weights(workers, step)
+                _raise_if_nonfinite_weights(honest_workers, step)
                 if step % 10 == 0:
                     tracker.save_snapshot()
-        tracker.finalize(workers)
+        tracker.finalize(honest_workers)
