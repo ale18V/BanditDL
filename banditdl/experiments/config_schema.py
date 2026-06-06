@@ -94,6 +94,10 @@ class BanditDLConfig:
         return str(self.sampler.get("reward", "parameter_distance"))
 
     @property
+    def total_nodes(self) -> int:
+        return self.topology.nodes
+
+    @property
     def nb_honests(self) -> int:
         return self.topology.nodes - self.adversary.byzcount
 
