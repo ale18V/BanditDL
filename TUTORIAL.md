@@ -93,6 +93,7 @@ Common metrics under `$RUN_DIR/results/` include:
 - `global_accuracy.npy`
 - `local_loss.npy`
 - `train_loss.npy`
+- `sampler_weights.npy`
 - `sampler_probabilities.npy`
 - `reward_algorithm.npy`
 - `reward_oracle.npy`

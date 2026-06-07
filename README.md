@@ -248,11 +248,15 @@ Topology configs are in `conf/topology/`.
 
 Sampler configs are in `conf/sampler/`. They are used by dynamic topologies.
 
-- `name`: sampler implementation, for example `uniform`, `epsilon_greedy`, or `exp3`.
-- `reward`: reward strategy for learning samplers. Current value: `parameter_distance`.
-- `params`: sampler-specific parameters, for example `epsilon` and `initial_value`.
+- `name`: sampler implementation: `uniform`, `epsilon_greedy`, `exp3`, `cucb`,
+  `cts`, `discounted_cucb`, or `discounted_cts`.
+- `reward`: `parameter_distance` or `cosine_similarity`.
+- `params`: sampler-specific parameters such as `epsilon`, `gamma`, or
+  `exploration`.
 
 Shared runtime facts such as `topology.nodes`, sampled-neighbor count, `optimization.rounds`, and seed are passed to samplers through runtime context rather than duplicated in sampler config.
+The reward can be overridden independently when comparing samplers, for example
+`sampler=uniform sampler.reward=cosine_similarity`.
 
 ### Adversary Config
 
@@ -534,12 +538,32 @@ uv run -m banditdl \
   seed=0
 ```
 
+Use combinatorial UCB or Thompson sampling:
+
+```bash
+uv run -m banditdl sampler=cucb
+uv run -m banditdl sampler=cts
+uv run -m banditdl sampler=discounted_cucb sampler.params.gamma=0.99
+uv run -m banditdl sampler=discounted_cts sampler.params.gamma=0.99
+```
+
+Keep reward choice constant in algorithm comparisons:
+
+```bash
+uv run -m banditdl --multirun \
+  sampler=uniform,cucb,cts \
+  sampler.reward=cosine_similarity
+```
+
 Current bandit feedback:
 - each neighbor is one arm,
-- MABWiser provides epsilon-greedy; EXP3 is implemented locally,
+- each round selects multiple arms and observes one reward per selected arm,
+- MABWiser provides epsilon-greedy; the semi-bandit samplers are implemented locally,
 - dynamic workers update selected arms after receiving neighbor weights,
-- reward is selected through a strategy object; the default is `parameter_distance`,
+- reward is selected through a strategy object,
 - `parameter_distance` uses `1 / (1 + parameter_distance)` against the local model before aggregation.
+- `cosine_similarity` maps parameter cosine similarity from `[-1, 1]` to `[0, 1]`.
+- discounted CUCB and CTS exponentially discount evidence by `gamma`.
 
 Dynamic runs also save hindsight diagnostics for every sampler, including uniform:
 - `reward_algorithm.npy`: cumulative reward achieved by sampled neighbors,
@@ -553,16 +577,24 @@ Dynamic runs also save hindsight diagnostics for every sampler, including unifor
 - `reward_selected_max.npy`: per-round, per-node maximum reward among selected neighbors.
 - `selected_neighbors.npy`: sampled neighbors per round and worker.
 - `oracle_neighbors.npy`: best fixed hindsight neighbors per round and worker.
+- `sampler_weights.npy`: normalized sampler preference scores with shape
+  `(rounds, honest_workers, total_nodes)`.
 - `sampler_probabilities.npy`: per-round sampler probabilities with shape `(rounds, honest_workers, total_nodes)`.
-- KL-to-uniform, minimum probability, and maximum probability curves are derived from `sampler_probabilities.npy` when plotting.
+- probabilities represent normalized top-k inclusion mass, `P(arm is selected) / k`;
+  stochastic samplers estimate it without changing the sampler's training RNG.
+- KL-to-uniform, entropy, minimum, and maximum curves are derived from the saved
+  weights and probabilities when plotting.
 - `audit.json`: partition parameters, participant counts, and each honest node's sample/label distribution.
 
-Metric arrays are checkpointed every ten rounds and at shutdown. Sampler
-probabilities are written round-by-round; unfinished trailing rounds remain
+Metric arrays are checkpointed every ten rounds and at shutdown. Sampler weights
+and probabilities are written round-by-round; unfinished trailing rounds remain
 `NaN` and are ignored by loaders and plots.
 
 The automatic plot `plots/sampler_aggressiveness.png` shows:
 - KL divergence to uniform aggregated across nodes by average, median, min, and max.
-- The global min and max sampler probabilities per round.
+- sampler entropy and the global min/max probabilities per round.
+
+`plots/sampler_weights.png` reports the same summaries for sampler preference
+weights.
 
 This is intentionally small: sampler choice and sampler-specific parameters are Hydra-controlled, shared runtime facts are passed through `SamplerContext`, and reward design remains isolated behind the reward strategy API in `banditdl/core/sampling.py`. For EXP3, `gamma: auto` uses `optimization.rounds` as the known horizon.

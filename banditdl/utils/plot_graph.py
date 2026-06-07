@@ -35,7 +35,7 @@ import numpy as np
 from matplotlib import cm
 from omegaconf import OmegaConf
 
-from banditdl.utils.metrics import trim_unwritten_probability_rounds
+from banditdl.utils.metrics import trim_unwritten_rounds
 
 WeightSource = Literal["sampler_probability", "neighbor_disagreement"]
 
@@ -79,12 +79,12 @@ def _load_weights(
         by_seed_path = run_dir / "sampler_probabilities_final_by_seed.npy"
         path = run_dir / "sampler_probabilities_final.npy"
         if full_by_seed_path.is_file():
-            history = trim_unwritten_probability_rounds(np.load(full_by_seed_path))
+            history = trim_unwritten_rounds(np.load(full_by_seed_path))
             if history.shape[1] == 0:
                 raise ValueError(f"{full_by_seed_path} has no completed rounds")
             prob = np.nanmean(history[:, -1], axis=0)
         elif full_path.is_file():
-            history = trim_unwritten_probability_rounds(np.load(full_path))
+            history = trim_unwritten_rounds(np.load(full_path))
             if history.shape[0] == 0:
                 raise ValueError(f"{full_path} has no completed rounds")
             prob = history[-1]

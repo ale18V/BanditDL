@@ -189,6 +189,11 @@ def _sampler_aggressiveness_panels() -> list[Panel]:
             _node_series(MetricKey.SAMPLER_KL_TO_UNIFORM),
         ),
         Panel(
+            "Sampler Probability Entropy",
+            "Entropy",
+            _node_series(MetricKey.SAMPLER_ENTROPY),
+        ),
+        Panel(
             "Sampler Probability Range",
             "Probability",
             [
@@ -202,6 +207,41 @@ def _sampler_aggressiveness_panels() -> list[Panel]:
                 Series(
                     MetricKey.SAMPLER_MIN_PROBABILITY,
                     "min probability",
+                    min_,
+                    color="tab:blue",
+                    marker=False,
+                ),
+            ],
+        ),
+    ]
+
+
+def _sampler_weight_panels() -> list[Panel]:
+    return [
+        Panel(
+            "Sampler Preference Concentration",
+            "KL(weights || uniform)",
+            _node_series(MetricKey.SAMPLER_WEIGHT_KL_TO_UNIFORM),
+        ),
+        Panel(
+            "Sampler Preference Entropy",
+            "Entropy",
+            _node_series(MetricKey.SAMPLER_WEIGHT_ENTROPY),
+        ),
+        Panel(
+            "Sampler Preference Range",
+            "Normalized weight",
+            [
+                Series(
+                    MetricKey.SAMPLER_MAX_WEIGHT,
+                    "max weight",
+                    max_,
+                    color="tab:red",
+                    marker=False,
+                ),
+                Series(
+                    MetricKey.SAMPLER_MIN_WEIGHT,
+                    "min weight",
                     min_,
                     color="tab:blue",
                     marker=False,
@@ -305,6 +345,7 @@ def plot_all(run_dir: Path, plots_dir: Path, run_label: str | None = None) -> No
         "sampler_aggressiveness.png",
         _sampler_aggressiveness_panels(),
     )
+    plotter.plot("sampler_weights.png", _sampler_weight_panels())
 
     plotter.plot(
         "reward.png",
