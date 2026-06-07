@@ -2,4 +2,4 @@ name: discounted_cucb
 reward: parameter_distance
 params:
   exploration: 2.0
-  gamma: 0.99
+  discount: 0.99

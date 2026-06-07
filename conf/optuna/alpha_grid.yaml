@@ -1,0 +1,47 @@
+name: alpha-grid
+direction: maximize
+workers: null
+
+plot:
+  heatmaps:
+    - x: heterogeneity.alpha
+      y: topology.sampling
+      group_by:
+        - sampler.name
+        - [sampler.name, sampler.reward]
+      aggregate_by: avg
+      render: [heatmap]
+      exclude_metrics: []
+
+# Small exhaustive example. Expand the categorical choices for production.
+search_space:
+  heterogeneity.alpha:
+    name: alpha
+    type: categorical
+    choices: [0.5, 1.0]
+  topology.sampling:
+    name: sampling
+    type: categorical
+    choices: [0.2]
+  sampler.name:
+    name: sampler
+    type: categorical
+    choices: [uniform, cucb, cts, discounted_cucb, discounted_cts]
+  sampler.reward:
+    name: reward
+    type: categorical
+    choices: [parameter_distance, cosine_similarity]
+    when:
+      sampler.name: [cucb, cts, discounted_cucb, discounted_cts]
+  sampler.params.exploration:
+    name: exploration
+    type: categorical
+    choices: [1.0]
+    when:
+      sampler.name: [cucb, discounted_cucb]
+  sampler.params.discount:
+    name: discount
+    type: categorical
+    choices: [0.99]
+    when:
+      sampler.name: [discounted_cucb, discounted_cts]

@@ -1,4 +1,6 @@
+name: sanity-grid
 direction: maximize
+workers: null
 search_space:
   heterogeneity.alpha:
     name: alpha

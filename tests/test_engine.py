@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import torch
 
 from banditdl.experiments.config_schema import BanditDLConfig
 from banditdl.experiments.engine import (
@@ -61,7 +62,6 @@ def test_sampler_diagnostics_are_progressively_written(tmp_path):
     np.testing.assert_allclose(weights[0], 0.25)
     assert np.isnan(weights[1]).all()
 
-
 def test_tracker_records_validation_checkpoints_and_roundwise_train_loss(tmp_path):
     cfg = BanditDLConfig()
     cfg.topology.nodes = 1
@@ -81,3 +81,54 @@ def test_tracker_records_validation_checkpoints_and_roundwise_train_loss(tmp_pat
         np.load(tmp_path / "train_loss.npy")[:, 0],
         np.arange(1, 7, dtype=float),
     )
+
+
+class _EvaluationWorker:
+    worker_id = 0
+
+    def compute_validation_accuracy(self):
+        return 0.75
+
+    def compute_validation_loss(self):
+        return 0.5
+
+    def compute_train_loss(self):
+        return 0.4
+
+    def compute_accuracy_on_loader(self, loader):
+        return 0.8
+
+    def pull(self, context):
+        return torch.tensor([1.0])
+
+
+def test_final_evaluation_is_saved_when_rounds_are_not_divisible_by_delta(tmp_path):
+    cfg = BanditDLConfig()
+    cfg.topology.nodes = 2
+    cfg.optimization.rounds = 25
+    cfg.evaluation.evaluation_delta = 20
+    worker = _EvaluationWorker()
+
+    with ResultTracker(cfg, tmp_path) as tracker:
+        tracker.evaluate_step(0, [worker, worker])
+        tracker.evaluate_step(20, [worker, worker])
+        tracker.finalize([worker, worker])
+
+    accuracy = np.load(tmp_path / "validation_accuracy.npy")
+    assert tracker.validation_steps == [0, 20, 25]
+    assert accuracy.shape == (3, 2)
+    np.testing.assert_allclose(accuracy[-1], 0.75)
+
+
+def test_final_test_accuracy_has_a_dedicated_metric_file(tmp_path):
+    cfg = BanditDLConfig()
+    cfg.topology.nodes = 2
+    cfg.optimization.rounds = 1
+    cfg.evaluation.evaluation_delta = 1
+    cfg.evaluation.evaluate_test = True
+    worker = _EvaluationWorker()
+
+    with ResultTracker(cfg, tmp_path, test_loader=object()) as tracker:
+        tracker.finalize([worker, worker])
+
+    np.testing.assert_allclose(np.load(tmp_path / "test_accuracy.npy"), [0.8, 0.8])

@@ -28,11 +28,11 @@ def test_neighbor_sampler_factory():
     assert isinstance(make_neighbor_sampler("cucb"), CUCBNeighborSampler)
     assert isinstance(make_neighbor_sampler("cts"), CTSNeighborSampler)
     assert make_neighbor_sampler(
-        "discounted_cucb", params={"gamma": 0.8}
+        "discounted_cucb", params={"discount": 0.8}
     ).discount == pytest.approx(0.8)
-    assert make_neighbor_sampler("discounted_cts", params={"gamma": 0.7}).discount == pytest.approx(
-        0.7
-    )
+    assert make_neighbor_sampler(
+        "discounted_cts", params={"discount": 0.7}
+    ).discount == pytest.approx(0.7)
 
 
 def test_exp3_sampler_factory_uses_context_horizon():

@@ -508,14 +508,14 @@ def make_neighbor_sampler(
             diagnostic_samples=int(params.pop("diagnostic_samples", DEFAULT_DIAGNOSTIC_SAMPLES)),
         )
     if name in {"cucb", "discounted_cucb"}:
-        discount = 1.0 if name == "cucb" else float(params.pop("gamma", 0.99))
+        discount = 1.0 if name == "cucb" else float(params.pop("discount", 0.99))
         return CUCBNeighborSampler(
             exploration=float(params.pop("exploration", 2.0)),
             discount=discount,
             seed=seed,
         )
     if name in {"cts", "discounted_cts"}:
-        discount = 1.0 if name == "cts" else float(params.pop("gamma", 0.99))
+        discount = 1.0 if name == "cts" else float(params.pop("discount", 0.99))
         return CTSNeighborSampler(
             discount=discount,
             seed=seed,

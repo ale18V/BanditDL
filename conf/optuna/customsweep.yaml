@@ -1,4 +1,6 @@
+name: custom-grid
 direction: maximize
+workers: null
 search_space:
   heterogeneity.alpha:
     name: alpha

@@ -89,7 +89,7 @@ Used only by dynamic topology.
 - `sampler=cts`
 - `sampler=discounted_cucb`
 - `sampler=discounted_cts`
-- `sampler=bandit`: epsilon-greedy profile
+- `sampler=epsilon_greedy`: epsilon-greedy profile
 
 Important fields:
 
@@ -98,7 +98,7 @@ Important fields:
 - `sampler.params.*`
 
 The sampler horizon is `optimization.rounds`; do not duplicate it in sampler config.
-`discounted_cucb` and `discounted_cts` use `sampler.params.gamma` as their
+`discounted_cucb` and `discounted_cts` use `sampler.params.discount` as their
 evidence discount. CUCB also exposes `sampler.params.exploration`.
 
 ### Optimization

@@ -72,14 +72,19 @@ Launch Optuna sweeps with Hydra output folders:
 uv run python -m banditdl.experiments.sweep
 ```
 
-Defaults (`conf/sweep.yaml`) compose `conf/config.yaml` plus `conf/optuna/sanitysweep.yaml`.
+Defaults (`conf/sweep.yaml`) compose `conf/config.yaml` plus
+`conf/optuna/alpha_grid.yaml`.
 
 Behavior:
-- Exhaustively enumerates valid Cartesian combinations when all `optuna.search_space` entries are categorical.
-- Uses Optuna sampling and `optuna.n_trials` when the search space contains continuous `float` / `int` entries.
+- Exhaustively enumerates valid categorical combinations.
 - Respects optional `when:` guards for conditional parameters such as sampler-specific hyperparameters.
+- Runs configurations concurrently in spawned processes. `optuna.workers: null`
+  means one worker per visible GPU; a larger explicit value shares GPUs
+  round-robin.
 - Runs one Optuna trial per non-seed configuration and repeats that configuration `num_seeds` times.
-- Writes seed-averaged trial artifacts under `<hydra_run>/trials/<param_tokens>/results/` and raw seed artifacts under that directory's `seeds/` subfolder.
+- Writes seed-averaged artifacts under
+  `<hydra_run>/trials/config-<id>_<params>/attempt-<n>/results/`; raw seed
+  artifacts live in its `seeds/` subfolder.
 - Persists the Optuna study to `<hydra_run>/optuna.db` for offline sweep plotting.
 - Tracks mean validation accuracy across seeds, selects the best trial, then re-runs all of its seeds with test evaluation under `<hydra_run>/best_trial_test_eval/results`.
 - If `plot.enabled: true`, renders configured sweep plots under `<hydra_run>/sweep_artifacts/`.
@@ -129,10 +134,23 @@ Use a custom output directory if desired:
 uv run python scripts/plot_sweep.py .hydra_runs/<date>/<time> --output-dir plots/my_sweep
 ```
 
-For larger sweeps:
+Available editable exhaustive profiles:
 
 ```bash
-uv run python -m banditdl.experiments.sweep optuna=sweep
+uv run python -m banditdl.experiments.sweep optuna=alpha_grid
+uv run python -m banditdl.experiments.sweep optuna=clustering_grid
+```
+
+Sweep roots are named:
+
+```text
+.optuna_runs/<profile>/<timestamp>_<slurm-job-id>/
+```
+
+Trial folders include the configuration ID and parameters:
+
+```text
+trials/config-0042_sampler=cts_reward=cosine_similarity_alpha=0.5/
 ```
 
 Note on Hydra composition: `conf/override.yaml` is loaded as the last entry of
@@ -520,7 +538,7 @@ Use the epsilon-greedy bandit sampler:
 uv run -m banditdl \
   dataset=mnist \
   topology=dynamic \
-  sampler=bandit \
+  sampler=epsilon_greedy \
   sampler.params.epsilon=0.1 \
   topology.sampling=0.05 \
   seed=0
@@ -543,8 +561,8 @@ Use combinatorial UCB or Thompson sampling:
 ```bash
 uv run -m banditdl sampler=cucb
 uv run -m banditdl sampler=cts
-uv run -m banditdl sampler=discounted_cucb sampler.params.gamma=0.99
-uv run -m banditdl sampler=discounted_cts sampler.params.gamma=0.99
+uv run -m banditdl sampler=discounted_cucb sampler.params.discount=0.99
+uv run -m banditdl sampler=discounted_cts sampler.params.discount=0.99
 ```
 
 Keep reward choice constant in algorithm comparisons:
@@ -563,7 +581,7 @@ Current bandit feedback:
 - reward is selected through a strategy object,
 - `parameter_distance` uses `1 / (1 + parameter_distance)` against the local model before aggregation.
 - `cosine_similarity` maps parameter cosine similarity from `[-1, 1]` to `[0, 1]`.
-- discounted CUCB and CTS exponentially discount evidence by `gamma`.
+- discounted CUCB and CTS exponentially discount evidence by `discount`.
 
 Dynamic runs also save hindsight diagnostics for every sampler, including uniform:
 - `reward_algorithm.npy`: cumulative reward achieved by sampled neighbors,

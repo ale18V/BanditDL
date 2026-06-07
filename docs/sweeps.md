@@ -43,30 +43,29 @@ This uses `conf/sweep.yaml`, which composes:
 
 Profiles:
 
+- `optuna=alpha_grid`
+- `optuna=clustering_grid`
 - `optuna=sanitysweep`
 - `optuna=customsweep`
-- `optuna=sweep`
 
 Example:
 
 ```bash
-uv run python -m banditdl.experiments.sweep optuna=customsweep
+uv run python -m banditdl.experiments.sweep optuna=alpha_grid
 ```
 
 ## What the Sweep Runner Does
 
-The runner supports two search modes:
-
-- categorical-only search spaces are executed as an exhaustive conditional grid
-- mixed or continuous search spaces use Optuna suggestions and `optuna.n_trials`
+The runner executes exhaustive categorical grids. Continuous and sampled
+search spaces are intentionally unsupported.
 
 Workflow:
 
 1. read `optuna.search_space`
-2. either enumerate valid categorical combinations or sample continuous values
+2. enumerate every valid categorical combination
 3. respect `when:` guards for conditional parameters
 4. run one seed-averaged training job per trial
-5. save trial outputs under `<hydra_run>/trials/.../results/`
+5. run configurations concurrently and save isolated trial attempts
 6. persist the Optuna study to `<hydra_run>/optuna.db`
 7. pick the best trial from validation accuracy
 8. rerun the best trial with test evaluation
@@ -75,17 +74,18 @@ Workflow:
 Sweep outputs live under:
 
 ```text
-<hydra_run>/
+.optuna_runs/<profile>/<timestamp>_<job-id>/
   optuna.db
   trials/
-    <trial_name>/results/
+    config-0042_sampler=cts_reward=cosine_similarity/
+      attempt-01/results/
   best_trial_test_eval/results/
   sweep_artifacts/
 ```
 
 ## Search Space Format
 
-Use categorical choices, continuous ranges, and optional `when:` guards.
+Use categorical choices and optional `when:` guards.
 
 ```yaml
 search_space:
@@ -95,10 +95,8 @@ search_space:
     choices: [0.1, 0.5]
 
   topology.sampling:
-    type: float
-    low: 0.01
-    high: 1.0
-    log: true
+    type: categorical
+    choices: [0.1, 0.2]
 
   sampler.name:
     name: sampler
@@ -117,9 +115,25 @@ Notes:
 
 - `name` is a display label in sweep outputs
 - `choices` defines a categorical axis
-- `type: float` / `type: int` define Optuna-sampled axes
-- `n_trials` in `conf/optuna/*.yaml` controls sampled continuous/mixed sweeps
 - `when:` prevents invalid combinations
+
+## Parallel Workers
+
+`optuna.workers: null` starts one process per visible GPU. Set an explicit
+value to change concurrency:
+
+```bash
+uv run python -m banditdl.experiments.sweep \
+  optuna=alpha_grid optuna.workers=8
+```
+
+Workers are assigned to GPUs round-robin. Eight workers with four GPUs means
+two independent trials per GPU. Each trial uses one GPU; seeds remain
+sequential inside that trial.
+
+The parent process alone writes `optuna.db`. Failed configurations are retried
+once. Re-running with the same `hydra.run.dir` resumes the study and skips
+completed configuration IDs.
 
 ## Sweep Plotting Config
 

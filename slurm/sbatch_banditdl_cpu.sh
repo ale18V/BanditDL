@@ -1,7 +1,7 @@
 #!/bin/bash -l
 # Submit a BanditDL CPU-only run on an EPFL CPU cluster (e.g. Jed).
 #
-#   sbatch slurm/sbatch_banditdl_cpu.sh dataset=cifar10 sampler=bandit seed=0
+#   sbatch slurm/sbatch_banditdl_cpu.sh dataset=cifar10 sampler=epsilon_greedy seed=0
 #   sbatch slurm/sbatch_banditdl_cpu.sh dataset=femnist topology.nodes=30
 #   sbatch --time=04:00:00 --job-name=cifar_seed3 slurm/sbatch_banditdl_cpu.sh dataset=cifar10 seed=3
 #
