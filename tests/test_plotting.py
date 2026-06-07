@@ -47,3 +47,5 @@ def test_plot_all_writes_gradient_norm_loglog_plot(tmp_path):
     assert (plots_dir / "global_accuracy.png").is_file()
     assert (plots_dir / "sampler_aggressiveness.png").is_file()
     assert (plots_dir / "sampler_weights.png").is_file()
+    assert (plots_dir / "clustering_sampler_weight.png").is_file()
+    assert (plots_dir / "collaboration_embedding.png").is_file()

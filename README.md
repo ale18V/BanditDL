@@ -597,4 +597,23 @@ The automatic plot `plots/sampler_aggressiveness.png` shows:
 `plots/sampler_weights.png` reports the same summaries for sampler preference
 weights.
 
+The automatic sampler-structure plots are:
+
+- `clustering_sampler_weight.png`: the directed sampler-weight graph averaged
+  over the final 10% of rounds. It only draws outgoing edges above that node's
+  mean weight plus one standard deviation.
+- `collaboration_embedding.png`: a spectral projection where nodes are close
+  when both assign strong weight to each other. Positions use the complete
+  mutual matrix; edge filtering affects only the visible overlay.
+
+Generate either view again with a different edge threshold:
+
+```bash
+uv run python scripts/plot_clustering_graph.py RUN_DIR \
+  --weight sampler_weight --relative-threshold 1.5
+
+uv run python scripts/plot_clustering_graph.py RUN_DIR \
+  --embedding --relative-threshold 1.5
+```
+
 This is intentionally small: sampler choice and sampler-specific parameters are Hydra-controlled, shared runtime facts are passed through `SamplerContext`, and reward design remains isolated behind the reward strategy API in `banditdl/core/sampling.py`. For EXP3, `gamma: auto` uses `optimization.rounds` as the known horizon.

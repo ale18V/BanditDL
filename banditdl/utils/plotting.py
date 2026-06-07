@@ -391,14 +391,32 @@ def plot_all(run_dir: Path, plots_dir: Path, run_label: str | None = None) -> No
         ],
     )
 
-    from banditdl.utils.plot_graph import plot_clustering_graph
+    from banditdl.utils.plot_graph import (
+        plot_clustering_graph,
+        plot_collaboration_embedding,
+    )
 
-    for weight_source in ("sampler_probability", "neighbor_disagreement"):
+    for weight_source in (
+        "sampler_weight",
+        "sampler_probability",
+        "neighbor_disagreement",
+    ):
         try:
             plot_clustering_graph(
                 run_dir,
                 Path(plots_dir) / f"clustering_{weight_source}.png",
                 weight_source=weight_source,
+                relative_threshold=1.0
+                if weight_source.startswith("sampler_")
+                else None,
             )
         except FileNotFoundError:
             pass
+
+    try:
+        plot_collaboration_embedding(
+            run_dir,
+            Path(plots_dir) / "collaboration_embedding.png",
+        )
+    except FileNotFoundError:
+        pass
