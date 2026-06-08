@@ -24,7 +24,7 @@ def _base_cfg():
                 "params": {"epsilon": 0.1, "initial_value": 0.0},
             },
             "adversary": {"byzcount": 0, "byzantine_budget": 0, "attack": None},
-            "aggregator": {"pre_aggregator": "nnm", "aggregator": "average", "rag": True},
+            "aggregator": {"pre_aggregator": None, "aggregator": "average", "rag": True},
             "heterogeneity": {
                 "_target_": "banditdl.data.partitioning.SyntheticPartitionStrategy",
                 "method": "dirichlet",

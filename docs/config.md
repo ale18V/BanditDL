@@ -147,6 +147,9 @@ Group: `conf/aggregator/`
 - `aggregator.aggregator`
 - `aggregator.rag`
 
+Use `aggregator=mean` for unfiltered averaging of selected neighbor models plus
+the local model.
+
 ## Common CLI Patterns
 
 Single run:

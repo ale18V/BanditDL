@@ -289,8 +289,9 @@ Adversary configs are in `conf/adversary/`.
 
 Aggregator configs are in `conf/aggregator/`.
 
-- `pre_aggregator`: optional first-stage robust aggregation rule, commonly `nnm`.
-- `aggregator`: robust aggregator, commonly `average` or `trmean`.
+- `pre_aggregator`: optional first-stage robust aggregation rule. Keep it `null`
+  for plain averaging.
+- `aggregator`: aggregation rule, commonly `average` or `trmean`.
 - `rag`: robust aggregation flag. Dynamic runs force this to `true`.
 
 Available robust aggregators include `average`, `trmean`, `median`, `geometric_median`, `krum`, `multi_krum`, `nnm`, `bucketing`, `pmk`, `cc`, `mda`, `mva`, `monna`, `meamed`.
