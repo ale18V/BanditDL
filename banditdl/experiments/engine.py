@@ -351,7 +351,7 @@ def _init_workers(cfg: BanditDLConfig, train_dict, test_dict, device: str):
             reward_strategy=make_reward_strategy(cfg.resolved_reward_name),
         )
         w = DynamicWorker(worker_id, train_dict[worker_id], test_dict[worker_id], config)
-        if worker_id > 0:
+        if worker_id > 0 and cfg.identical_initialization:
             w.model.load_state_dict(workers[0].model.state_dict())
         workers.append(w)
     return workers
