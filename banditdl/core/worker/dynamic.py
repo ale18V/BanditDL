@@ -29,9 +29,7 @@ class DynamicWorker(HonestWorker):
             ),
         )
         self.neighbor_sampler = config.neighbor_sampler or make_neighbor_sampler("uniform")
-        self.reward_strategy = config.reward_strategy or make_reward_strategy(
-            "parameter_distance"
-        )
+        self.reward_strategy = config.reward_strategy or make_reward_strategy("parameter_distance")
         self.robust_aggregator = RobustAggregator(
             config.aggregator,
             config.pre_aggregator,
@@ -50,9 +48,7 @@ class DynamicWorker(HonestWorker):
         if self.rag:
             self._aggregate_with_rag(pivot_params, weights)
         else:
-            self._aggregate_cgplus(
-                pivot_params, weights, max(self._current_step - 1, 0)
-            )
+            self._aggregate_cgplus(pivot_params, weights, max(self._current_step - 1, 0))
         return None
 
     def _sample_neighbors(self):
@@ -60,11 +56,9 @@ class DynamicWorker(HonestWorker):
         indices_list.remove(self.worker_id)
         return self.neighbor_sampler.sample(indices_list, self.nb_neighbors)
 
-    def observe_neighbors(self, neighbor_indices, neighbor_weights) -> None:
+    def observe_neighbors(self, neighbor_indices, rewards) -> None:
         if not hasattr(self.neighbor_sampler, "update"):
             return None
-        pivot_params = self.pull(None)
-        rewards = self.reward_strategy.score(pivot_params, neighbor_weights)
         self.neighbor_sampler.update(neighbor_indices, rewards)
         return None
 
@@ -73,9 +67,7 @@ class DynamicWorker(HonestWorker):
         differences = worker_params - pivot_params
         distances = differences.norm(dim=1)
         clipping_threshold = (
-            torch.topk(distances, 2 * self.b_hat).values[-1]
-            if self.b_hat > 0
-            else torch.inf
+            torch.topk(distances, 2 * self.b_hat).values[-1] if self.b_hat > 0 else torch.inf
         )
         mask = distances[:, None].broadcast_to(differences.shape) > clipping_threshold
         clipped_differences = torch.where(
@@ -83,9 +75,9 @@ class DynamicWorker(HonestWorker):
         )
 
         communication_lr = 1 / (current_step // 250 + 1)
-        aggregate_params = pivot_params + communication_lr * clipped_differences.sum(
-            dim=0
-        ) * (1 / self.nb_neighbors)
+        aggregate_params = pivot_params + communication_lr * clipped_differences.sum(dim=0) * (
+            1 / self.nb_neighbors
+        )
         self.set_model_parameters(aggregate_params)
 
     def _aggregate_with_rag(self, pivot_params, worker_params):

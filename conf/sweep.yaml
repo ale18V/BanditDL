@@ -1,13 +1,17 @@
 defaults:
   - config
-  - optuna: sanitysweep
+  - optuna: alpha_grid
   - _self_
+
+hydra:
+  run:
+    dir: .optuna_runs/${optuna.name}/${now:%Y-%m-%d_%H-%M-%S}_${oc.env:SLURM_JOB_ID,local}
 
 plot:
   enabled: true
   directions:
-    - avg
-    - worse
+    - mean
+    - worst
 
   # By default, sweep plots try every known scalar metric saved by the runs.
   # Individual plot specs can remove metrics with exclude_metrics.

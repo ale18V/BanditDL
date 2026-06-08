@@ -267,3 +267,24 @@ def test_sampler_probability_loader_trims_unwritten_rounds(tmp_path):
 
     assert loaded.shape == (2, 2, 3)
     np.testing.assert_allclose(loaded, probabilities[:2])
+
+
+def test_sampler_weight_summaries_use_generic_distribution_logic(tmp_path):
+    weights = np.array(
+        [
+            [[0.0, 0.25, 0.75], [0.5, 0.0, 0.5]],
+            [[0.0, 0.5, 0.5], [0.9, 0.0, 0.1]],
+        ]
+    )
+    np.save(tmp_path / "sampler_weights.npy", weights)
+
+    loader = MetricLoader(tmp_path)
+
+    np.testing.assert_allclose(
+        loader.load_values(MetricKey.SAMPLER_MAX_WEIGHT),
+        np.array([[0.75, 0.5], [0.5, 0.9]]),
+    )
+    np.testing.assert_allclose(
+        loader.load_values(MetricKey.SAMPLER_WEIGHT_ENTROPY),
+        -np.sum(np.where(weights > 0, weights * np.log(np.maximum(weights, 1e-12)), 0), axis=2),
+    )

@@ -25,8 +25,13 @@ DEFAULT_PLOT_METRICS: tuple[str, ...] = (
     "consensus_drift",
     "gradient_norms",
     "sampler_kl_to_uniform",
+    "sampler_entropy",
     "sampler_min_probability",
     "sampler_max_probability",
+    "sampler_weight_kl_to_uniform",
+    "sampler_weight_entropy",
+    "sampler_min_weight",
+    "sampler_max_weight",
 )
 
 DEFAULT_DIRECTIONS: tuple[str, ...] = ("avg", "worse", "best")
@@ -308,6 +313,12 @@ def load_sweep_study(output_root: Path):
 
 def plot_config_from_cfg(cfg):
     plot_cfg = cfg.get("plot")
+    profile_plot = cfg.optuna.get("plot") if "optuna" in cfg else None
+    if plot_cfg is not None and profile_plot is not None:
+        return OmegaConf.to_container(
+            OmegaConf.merge(plot_cfg, profile_plot),
+            resolve=True,
+        )
     if plot_cfg is not None:
         return OmegaConf.to_container(plot_cfg, resolve=True)
     # Legacy shape from older sweep.yaml revisions.

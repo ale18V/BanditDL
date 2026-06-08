@@ -40,14 +40,14 @@ You will also need to `export HF_DATASETS_CACHE=...` in any sbatch invocation â€
 
 ```bash
 # CIFAR-10, epsilon-greedy bandit, seed 0
-sbatch slurm/sbatch_banditdl_gpu.sh dataset=cifar10 sampler=bandit seed=0
+sbatch slurm/sbatch_banditdl_gpu.sh dataset=cifar10 sampler=epsilon_greedy seed=0
 
 # FEMNIST writer-per-node, default sampler, 30 nodes
 sbatch slurm/sbatch_banditdl_gpu.sh dataset=femnist topology.nodes=30
 
 # CIFAR-10 with the grouped clustering partition
 sbatch slurm/sbatch_banditdl_gpu.sh \
-    dataset=cifar10 sampler=bandit heterogeneity=pathological_5g_2c topology.nodes=30 seed=0
+    dataset=cifar10 sampler=epsilon_greedy heterogeneity=pathological_5g_2c topology.nodes=30 seed=0
 ```
 
 All positional args are forwarded to `uv run -m banditdl`. `device=cuda` (GPU script) or `device=cpu` (CPU script) is added automatically unless you provide your own `device=` override.
@@ -91,12 +91,29 @@ Hydra's `-m` flag enumerates the Cartesian product **sequentially** inside one j
 **Pattern C â€” Optuna sweep (dedicated sweep entry point):**
 
 ```bash
-sbatch --time=24:00:00 slurm/sbatch_banditdl_optuna_gpu.sh optuna=sweep
+sbatch --time=24:00:00 --gres=gpu:4 --cpus-per-task=32 --mem=128G \
+    slurm/sbatch_banditdl_optuna_gpu.sh \
+    optuna=alpha_grid optuna.workers=8
 ```
 
-Use `slurm/submit_sweep_gpu.sh` only for its hard-coded shell sweeps
-(`cifar_dirichlet`, `femnist_pool_dirichlet`, etc.); it is not the Optuna entry
-point.
+This remains one Slurm job on one node. The example runs eight processes over
+four GPUs, assigning two workers to each GPU. Use `optuna=clustering_grid` for
+the grouped-partition template. Edit the categorical choices in the selected
+profile before a production run.
+
+Optuna output is written under:
+
+```text
+.optuna_runs/<profile>/<timestamp>_<slurm-job-id>/
+```
+
+To resume an interrupted sweep, submit the same command with:
+
+```bash
+hydra.run.dir=/absolute/path/to/the/existing/sweep
+```
+
+Completed configuration IDs are skipped.
 
 ## 4. Output
 

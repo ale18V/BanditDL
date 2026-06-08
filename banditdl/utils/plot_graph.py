@@ -1,7 +1,8 @@
-"""Render a 2D weighted graph of the worker network from a saved run.
+"""Render graph and collaboration views of saved sampler behavior.
 
-Two edge-weight modes:
+Three edge-weight modes:
 
+- `sampler_weight`: uses the mean sampler weights over the final rounds.
 - `sampler_probability`: uses the final round of `sampler_probabilities.npy`
   or legacy `sampler_probabilities_final.npy`, the per-worker sampler
   distribution. This is **directional**: entry `P[i, j]` is worker `i`'s
@@ -15,9 +16,9 @@ Two edge-weight modes:
   reward semantics. Model distance is symmetric, so this mode stays an
   undirected graph.
 
-Pass `threshold` to keep only edges whose weight exceeds it (e.g. drop the
-near-uniform exploration edges of an epsilon-greedy sampler), and/or
-`top_edges_per_node` to keep only each node's strongest outgoing edges.
+`relative_threshold=z` keeps outgoing edges above the node-specific
+`mean + z * standard deviation`, removing low-signal edges without requiring
+an absolute threshold.
 
 For clustered pathological partitions, nodes are colored by cluster and laid
 out on concentric clusters; otherwise a spring layout is used.
@@ -35,9 +36,13 @@ import numpy as np
 from matplotlib import cm
 from omegaconf import OmegaConf
 
-from banditdl.utils.metrics import trim_unwritten_probability_rounds
+from banditdl.utils.metrics import trim_unwritten_rounds
 
-WeightSource = Literal["sampler_probability", "neighbor_disagreement"]
+WeightSource = Literal[
+    "sampler_weight",
+    "sampler_probability",
+    "neighbor_disagreement",
+]
 
 
 def _hydra_cfg(run_dir: pathlib.Path):
@@ -73,18 +78,22 @@ def _load_weights(
     bandit) — and is rendered as a directed graph. For ``neighbor_disagreement``
     the matrix is a symmetric model-distance similarity (undirected).
     """
+    if weight_source == "sampler_weight":
+        weights = _load_sampler_history(run_dir, "sampler_weights.npy", tail_fraction=0.1)
+        n = weights.shape[0]
+        return np.asarray(weights[:, :n], dtype=float), True
     if weight_source == "sampler_probability":
         full_by_seed_path = run_dir / "sampler_probabilities_by_seed.npy"
         full_path = run_dir / "sampler_probabilities.npy"
         by_seed_path = run_dir / "sampler_probabilities_final_by_seed.npy"
         path = run_dir / "sampler_probabilities_final.npy"
         if full_by_seed_path.is_file():
-            history = trim_unwritten_probability_rounds(np.load(full_by_seed_path))
+            history = trim_unwritten_rounds(np.load(full_by_seed_path))
             if history.shape[1] == 0:
                 raise ValueError(f"{full_by_seed_path} has no completed rounds")
             prob = np.nanmean(history[:, -1], axis=0)
         elif full_path.is_file():
-            history = trim_unwritten_probability_rounds(np.load(full_path))
+            history = trim_unwritten_rounds(np.load(full_path))
             if history.shape[0] == 0:
                 raise ValueError(f"{full_path} has no completed rounds")
             prob = history[-1]
@@ -114,16 +123,41 @@ def _load_weights(
     raise ValueError(f"Unknown weight_source: {weight_source!r}")
 
 
+def _load_sampler_history(
+    run_dir: pathlib.Path,
+    filename: str,
+    *,
+    tail_fraction: float,
+) -> np.ndarray:
+    stem = pathlib.Path(filename).stem
+    by_seed_path = run_dir / f"{stem}_by_seed.npy"
+    path = run_dir / filename
+    source = by_seed_path if by_seed_path.is_file() else path
+    if not source.is_file():
+        raise FileNotFoundError(path)
+
+    history = trim_unwritten_rounds(np.load(source))
+    time_axis = 1 if history.ndim == 4 else 0
+    rounds = history.shape[time_axis]
+    if rounds == 0:
+        raise ValueError(f"{source} has no completed rounds")
+    tail = max(1, int(np.ceil(rounds * tail_fraction)))
+    history = np.take(history, np.arange(rounds - tail, rounds), axis=time_axis)
+    return np.nanmean(history, axis=tuple(range(time_axis + 1)))
+
+
 def _filter_edges(
     weights: np.ndarray,
     *,
     directed: bool,
     threshold: float | None = None,
+    relative_threshold: float | None = None,
     top_edges_per_node: int | None = None,
 ) -> np.ndarray:
     """Zero out edges that fail the threshold / top-k filters.
 
     - ``threshold``: keep only edges with weight strictly greater than it.
+    - ``relative_threshold``: keep row values above ``mean + z * std``.
     - ``top_edges_per_node``: keep only each node's ``k`` strongest *outgoing*
       edges. For undirected graphs the kept mask is symmetrized so both
       endpoints agree on the edge; for directed graphs each node keeps its own
@@ -134,6 +168,17 @@ def _filter_edges(
     weights = np.array(weights, dtype=float)
     np.fill_diagonal(weights, 0.0)
     n = weights.shape[0]
+
+    if relative_threshold is not None:
+        if relative_threshold < 0:
+            raise ValueError("relative_threshold must be non-negative")
+        mask = ~np.eye(n, dtype=bool)
+        rows = weights[mask].reshape(n, n - 1)
+        cutoffs = rows.mean(axis=1) + relative_threshold * rows.std(axis=1)
+        keep = weights > cutoffs[:, None]
+        if not directed:
+            keep = keep & keep.T
+        weights = weights * keep
 
     if top_edges_per_node is not None and top_edges_per_node < n - 1:
         keep = np.zeros_like(weights, dtype=bool)
@@ -182,6 +227,7 @@ def plot_clustering_graph(
     *,
     weight_source: WeightSource = "sampler_probability",
     threshold: float | None = None,
+    relative_threshold: float | None = None,
     top_edges_per_node: int | None = None,
     layout: Literal["auto", "spring", "group"] = "auto",
     title: str | None = None,
@@ -209,6 +255,7 @@ def plot_clustering_graph(
         weights,
         directed=directed,
         threshold=threshold,
+        relative_threshold=relative_threshold,
         top_edges_per_node=top_edges_per_node,
     )
 
@@ -278,8 +325,135 @@ def plot_clustering_graph(
         cbar.set_label(_edge_label(weight_source))
 
     if title is None:
-        title = f"{run_dir.name} — {weight_source}"
+        title = f"{run_dir.name} - {weight_source}"
     ax.set_title(title, fontsize=11)
+    if relative_threshold is not None:
+        ax.text(
+            0.5,
+            -0.02,
+            f"Edges exceed each source node's mean + {relative_threshold:g}σ.",
+            transform=ax.transAxes,
+            ha="center",
+            fontsize=8,
+        )
+    ax.set_axis_off()
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=160, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def mutual_collaboration(weights: np.ndarray) -> np.ndarray:
+    """Return strong only when both nodes assign strong weight to each other."""
+    weights = np.maximum(np.asarray(weights, dtype=float), 0.0)
+    collaboration = np.sqrt(weights * weights.T)
+    np.fill_diagonal(collaboration, 0.0)
+    return collaboration
+
+
+def spectral_embedding(collaboration: np.ndarray) -> np.ndarray:
+    """Project a symmetric collaboration matrix to two spectral coordinates."""
+    collaboration = np.asarray(collaboration, dtype=float)
+    degree = collaboration.sum(axis=1)
+    inv_sqrt = np.zeros_like(degree)
+    positive = degree > 0
+    inv_sqrt[positive] = 1.0 / np.sqrt(degree[positive])
+    normalized = inv_sqrt[:, None] * collaboration * inv_sqrt[None, :]
+    laplacian = np.eye(len(collaboration)) - normalized
+    _, vectors = np.linalg.eigh(laplacian)
+    coordinates = vectors[:, 1:3]
+    if coordinates.shape[1] < 2:
+        coordinates = np.pad(coordinates, ((0, 0), (0, 2 - coordinates.shape[1])))
+    return coordinates
+
+
+def _embedding_fidelity(collaboration: np.ndarray, coordinates: np.ndarray) -> float:
+    upper = np.triu_indices_from(collaboration, k=1)
+    strengths = collaboration[upper]
+    distances = np.linalg.norm(
+        coordinates[upper[0]] - coordinates[upper[1]],
+        axis=1,
+    )
+    if strengths.std() == 0 or distances.std() == 0:
+        return float("nan")
+    return float(np.corrcoef(strengths, -distances)[0, 1])
+
+
+def plot_collaboration_embedding(
+    run_dir: pathlib.Path,
+    output_path: pathlib.Path,
+    *,
+    relative_threshold: float = 1.0,
+    tail_fraction: float = 0.1,
+) -> pathlib.Path:
+    """Plot nodes close together when their sampler weights are mutually strong."""
+    run_dir, output_path = pathlib.Path(run_dir), pathlib.Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg = _hydra_cfg(run_dir)
+    n_honest = None
+    if cfg is not None:
+        n_honest = int(OmegaConf.select(cfg, "topology.nodes")) - int(
+            OmegaConf.select(cfg, "adversary.byzcount") or 0
+        )
+
+    weights = _load_sampler_history(
+        run_dir,
+        "sampler_weights.npy",
+        tail_fraction=tail_fraction,
+    )
+    n = n_honest or weights.shape[0]
+    weights = weights[:n, :n]
+    collaboration = mutual_collaboration(weights)
+    coordinates = spectral_embedding(collaboration)
+
+    strong = _filter_edges(
+        weights,
+        directed=True,
+        relative_threshold=relative_threshold,
+    )
+    visible = collaboration * ((strong > 0) & (strong.T > 0))
+    graph = nx.from_numpy_array(visible)
+    pos = {node: coordinates[node] for node in range(n)}
+    groups = _worker_groups(cfg, n) if cfg is not None else None
+
+    edges = list(graph.edges(data="weight"))
+    strengths = np.array([weight for _, _, weight in edges])
+    widths = 0.5 + 4 * strengths / strengths.max() if len(strengths) else 0.5
+
+    fig, ax = plt.subplots(figsize=(8, 7))
+    nx.draw_networkx_edges(
+        graph,
+        pos,
+        width=widths,
+        edge_color="tab:blue",
+        alpha=0.35,
+        ax=ax,
+    )
+    nx.draw_networkx_nodes(
+        graph,
+        pos,
+        node_color=_node_colors(groups, n),
+        node_size=260,
+        edgecolors="black",
+        linewidths=0.6,
+        ax=ax,
+    )
+    nx.draw_networkx_labels(graph, pos, font_size=7, ax=ax)
+
+    fidelity = _embedding_fidelity(collaboration, coordinates)
+    fidelity_text = "undefined" if np.isnan(fidelity) else f"{fidelity:.2f}"
+    ax.set_title("Mutual Sampler Collaboration")
+    ax.text(
+        0.5,
+        -0.04,
+        (
+            f"Positions use all mutual weights; visible edges exceed both nodes' "
+            f"mean + {relative_threshold:g}σ. Fidelity r={fidelity_text}."
+        ),
+        transform=ax.transAxes,
+        ha="center",
+        fontsize=8,
+    )
     ax.set_axis_off()
     fig.tight_layout()
     fig.savefig(output_path, dpi=160, bbox_inches="tight")
@@ -288,6 +462,8 @@ def plot_clustering_graph(
 
 
 def _edge_label(weight_source: WeightSource) -> str:
+    if weight_source == "sampler_weight":
+        return "Sampler preference weight, final 10% of rounds"
     if weight_source == "sampler_probability":
         return "Sampler probability P(i → j), final round"
     return "1 / (1 + final model L2 distance)"

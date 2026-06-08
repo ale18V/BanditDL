@@ -1,10 +1,12 @@
 #!/bin/bash -l
 # Submit a BanditDL Optuna sweep on the EPFL Izar GPU cluster.
 #
-#   sbatch slurm/sbatch_banditdl_optuna_gpu.sh optuna=sweep
+#   sbatch --gres=gpu:4 slurm/sbatch_banditdl_optuna_gpu.sh \
+#       optuna=alpha_grid optuna.workers=8
 #
 # All positional args are forwarded to `banditdl.experiments.sweep`. The script
 # auto-adds `device=cuda` unless the caller passes their own `device=` override.
+# Workers are assigned to visible GPUs round-robin, so workers may exceed GPUs.
 
 #SBATCH --job-name=banditdl_optuna
 #SBATCH --partition=gpu

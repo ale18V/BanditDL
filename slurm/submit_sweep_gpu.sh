@@ -126,7 +126,7 @@ case "$SWEEP" in
       for seed in "${LOCAL_SEEDS[@]}"; do
         name="fmpoolgrp_bandit_s${sampling}_seed${seed}"
         submit_one "$name" \
-          "dataset=femnist_pool optimization=opt_femnist sampler=bandit heterogeneity=pathological_5g_2c adversary=none topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS evaluation.evaluation_delta=20 seed=$seed"
+          "dataset=femnist_pool optimization=opt_femnist sampler=epsilon_greedy heterogeneity=pathological_5g_2c adversary=none topology.nodes=$NODES topology.sampling=$sampling optimization.rounds=$ROUNDS evaluation.evaluation_delta=20 seed=$seed"
         count=$((count + 1))
       done
     done

@@ -1,0 +1,4 @@
+name: cucb
+reward: parameter_distance
+params:
+  exploration: 2.0

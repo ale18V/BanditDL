@@ -24,10 +24,16 @@ class MetricKey(StrEnum):
     NEIGHBOR_DISAGREEMENT = "neighbor_disagreement"
     CONSENSUS_DRIFT = "consensus_drift"
     GRADIENT_NORMS = "gradient_norms"
+    SAMPLER_WEIGHTS = "sampler_weights"
     SAMPLER_PROBABILITIES = "sampler_probabilities"
     SAMPLER_KL_TO_UNIFORM = "sampler_kl_to_uniform"
+    SAMPLER_ENTROPY = "sampler_entropy"
     SAMPLER_MIN_PROBABILITY = "sampler_min_probability"
     SAMPLER_MAX_PROBABILITY = "sampler_max_probability"
+    SAMPLER_WEIGHT_KL_TO_UNIFORM = "sampler_weight_kl_to_uniform"
+    SAMPLER_WEIGHT_ENTROPY = "sampler_weight_entropy"
+    SAMPLER_MIN_WEIGHT = "sampler_min_weight"
+    SAMPLER_MAX_WEIGHT = "sampler_max_weight"
 
 
 ALIASES = {}
@@ -111,8 +117,16 @@ min_ = Aggregation("min", lambda values: _seed_outer_node_reduce(values, np.nanm
 
 SAMPLER_PROBABILITY_DERIVED = {
     MetricKey.SAMPLER_KL_TO_UNIFORM,
+    MetricKey.SAMPLER_ENTROPY,
     MetricKey.SAMPLER_MIN_PROBABILITY,
     MetricKey.SAMPLER_MAX_PROBABILITY,
+}
+
+SAMPLER_WEIGHT_DERIVED = {
+    MetricKey.SAMPLER_WEIGHT_KL_TO_UNIFORM,
+    MetricKey.SAMPLER_WEIGHT_ENTROPY,
+    MetricKey.SAMPLER_MIN_WEIGHT,
+    MetricKey.SAMPLER_MAX_WEIGHT,
 }
 
 
@@ -123,16 +137,16 @@ def resolve_metric(metric: MetricKey | str) -> MetricKey:
     return ALIASES.get(key, MetricKey(key))
 
 
-def sampler_probability_summary(metric: MetricKey, probabilities: np.ndarray) -> np.ndarray:
-    probabilities = np.asarray(probabilities, dtype=float)
-    if probabilities.ndim < 2:
-        raise ValueError("sampler probabilities must have worker and arm axes")
+def sampler_distribution_summary(metric: MetricKey, distribution: np.ndarray) -> np.ndarray:
+    distribution = np.asarray(distribution, dtype=float)
+    if distribution.ndim < 2:
+        raise ValueError("sampler distribution must have worker and arm axes")
 
-    workers, arms = probabilities.shape[-2:]
+    workers, arms = distribution.shape[-2:]
     mask = np.ones((workers, arms), dtype=bool)
     for worker_id in range(min(workers, arms)):
         mask[worker_id, worker_id] = False
-    valid = probabilities[..., mask].reshape(*probabilities.shape[:-2], workers, arms - 1)
+    valid = distribution[..., mask].reshape(*distribution.shape[:-2], workers, arms - 1)
     totals = np.nansum(valid, axis=-1, keepdims=True)
     valid = np.divide(
         valid,
@@ -141,27 +155,33 @@ def sampler_probability_summary(metric: MetricKey, probabilities: np.ndarray) ->
         where=totals > 0,
     )
 
-    if metric == MetricKey.SAMPLER_MIN_PROBABILITY:
+    if metric in {MetricKey.SAMPLER_MIN_PROBABILITY, MetricKey.SAMPLER_MIN_WEIGHT}:
         return np.nanmin(valid, axis=-1)
-    if metric == MetricKey.SAMPLER_MAX_PROBABILITY:
+    if metric in {MetricKey.SAMPLER_MAX_PROBABILITY, MetricKey.SAMPLER_MAX_WEIGHT}:
         return np.nanmax(valid, axis=-1)
-    if metric == MetricKey.SAMPLER_KL_TO_UNIFORM:
+    if metric in {
+        MetricKey.SAMPLER_KL_TO_UNIFORM,
+        MetricKey.SAMPLER_WEIGHT_KL_TO_UNIFORM,
+    }:
         uniform = 1.0 / (arms - 1)
         safe = np.maximum(valid, 1e-12)
         return np.nansum(valid * np.log(safe / uniform), axis=-1)
-    raise ValueError(f"{metric.value} is not a sampler probability summary")
+    if metric in {MetricKey.SAMPLER_ENTROPY, MetricKey.SAMPLER_WEIGHT_ENTROPY}:
+        safe = np.maximum(valid, 1e-12)
+        return -np.nansum(valid * np.log(safe), axis=-1)
+    raise ValueError(f"{metric.value} is not a sampler distribution summary")
 
 
-def trim_unwritten_probability_rounds(probabilities: np.ndarray) -> np.ndarray:
-    probabilities = np.asarray(probabilities)
-    time_axis = 1 if probabilities.ndim == 4 else 0
-    other_axes = tuple(axis for axis in range(probabilities.ndim) if axis != time_axis)
-    completed = ~np.all(np.isnan(probabilities), axis=other_axes)
+def trim_unwritten_rounds(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values)
+    time_axis = 1 if values.ndim == 4 else 0
+    other_axes = tuple(axis for axis in range(values.ndim) if axis != time_axis)
+    completed = ~np.all(np.isnan(values), axis=other_axes)
     completed_indices = np.flatnonzero(completed)
     if completed_indices.size == 0:
-        return np.take(probabilities, [], axis=time_axis)
+        return np.take(values, [], axis=time_axis)
     return np.take(
-        probabilities,
+        values,
         np.arange(completed_indices[-1] + 1),
         axis=time_axis,
     )
@@ -224,11 +244,13 @@ class MetricLoader:
             return TimeAverage()(self.load_values(MetricKey.REGRET))
         if key in SAMPLER_PROBABILITY_DERIVED:
             try:
-                return sampler_probability_summary(
+                return sampler_distribution_summary(
                     key, self.load_values(MetricKey.SAMPLER_PROBABILITIES)
                 )
             except FileNotFoundError:
                 pass
+        if key in SAMPLER_WEIGHT_DERIVED:
+            return sampler_distribution_summary(key, self.load_values(MetricKey.SAMPLER_WEIGHTS))
 
         for filename in NPY_CANDIDATES.get(key, (f"{key.value}.npy",)):
             for path in self._npy_paths(filename):
@@ -236,8 +258,11 @@ class MetricLoader:
                     values = np.load(path)
                     if values.size == 0:
                         raise ValueError(f"{path} is empty")
-                    if key == MetricKey.SAMPLER_PROBABILITIES:
-                        values = trim_unwritten_probability_rounds(values)
+                    if key in {
+                        MetricKey.SAMPLER_PROBABILITIES,
+                        MetricKey.SAMPLER_WEIGHTS,
+                    }:
+                        values = trim_unwritten_rounds(values)
                     return values
         raise FileNotFoundError(self.run_dir / f"{key.value}.npy")
 
@@ -255,11 +280,15 @@ class MetricLoader:
             return TimeAverage()(self.load_seed_values(MetricKey.REGRET))
         if key in SAMPLER_PROBABILITY_DERIVED:
             try:
-                return sampler_probability_summary(
+                return sampler_distribution_summary(
                     key, self.load_seed_values(MetricKey.SAMPLER_PROBABILITIES)
                 )
             except FileNotFoundError:
                 pass
+        if key in SAMPLER_WEIGHT_DERIVED:
+            return sampler_distribution_summary(
+                key, self.load_seed_values(MetricKey.SAMPLER_WEIGHTS)
+            )
 
         for filename in NPY_CANDIDATES.get(key, (f"{key.value}.npy",)):
             by_seed_path, path = self._npy_paths(filename)
@@ -267,15 +296,21 @@ class MetricLoader:
                 values = np.load(by_seed_path)
                 if values.size == 0:
                     raise ValueError(f"{by_seed_path} is empty")
-                if key == MetricKey.SAMPLER_PROBABILITIES:
-                    values = trim_unwritten_probability_rounds(values)
+                if key in {
+                    MetricKey.SAMPLER_PROBABILITIES,
+                    MetricKey.SAMPLER_WEIGHTS,
+                }:
+                    values = trim_unwritten_rounds(values)
                 return values
             if path.exists():
                 values = np.load(path)
                 if values.size == 0:
                     raise ValueError(f"{path} is empty")
-                if key == MetricKey.SAMPLER_PROBABILITIES:
-                    values = trim_unwritten_probability_rounds(values)
+                if key in {
+                    MetricKey.SAMPLER_PROBABILITIES,
+                    MetricKey.SAMPLER_WEIGHTS,
+                }:
+                    values = trim_unwritten_rounds(values)
                 return values[np.newaxis, ...]
         raise FileNotFoundError(self.run_dir / f"{key.value}.npy")
 
@@ -287,6 +322,7 @@ class MetricLoader:
             MetricKey.REWARD_ALGORITHM,
             MetricKey.REGRET,
             MetricKey.GRADIENT_NORMS,
+            MetricKey.SAMPLER_WEIGHTS,
             MetricKey.SAMPLER_PROBABILITIES,
             MetricKey.SAMPLER_KL_TO_UNIFORM,
         ):
