@@ -347,7 +347,7 @@ uv run -m banditdl dataset=mnist topology=my_dynamic sampler=my_bandit adversary
 ## Plot Saved Results
 
 Each Hydra run writes artifacts directly in its run folder:
-- `<hydra_run>/results/`: metrics as NumPy arrays (`validation_accuracy.npy`, `validation_loss.npy`, `global_accuracy.npy`, `train_loss.npy`, `test_accuracy.npy` when enabled, plus dynamic diagnostics).
+- `<hydra_run>/results/`: metrics as NumPy arrays (`validation_accuracy.npy`, `validation_loss.npy`, `global_accuracy.npy`, `global_loss.npy`, `train_loss.npy`, `test_accuracy.npy` when enabled, plus dynamic diagnostics).
 - `<hydra_run>/plots/`: auto-generated plots for all supported metrics.
 
 Example run folder:
@@ -395,6 +395,7 @@ Useful options:
 - `--metric validation_accuracy`: plot from `validation_accuracy.npy` (default).
 - `--metric validation_loss`: plot from `validation_loss.npy`.
 - `--metric global_accuracy`: plot from `global_accuracy.npy` (subsampled global test accuracy).
+- `--metric global_loss`: plot from `global_loss.npy` (subsampled global test loss).
 - `--metric train_loss`: plot from `train_loss.npy`.
 - `--metric test_accuracy`: plot from `test_accuracy.npy`.
 - `--metric regret`: plot regret against the best fixed neighbor subset in hindsight.

@@ -69,10 +69,12 @@ def test_metric_loader_reads_current_engine_metric_names(tmp_path):
     validation_accuracy = np.array([[0.2, 0.4], [0.6, 0.8]])
     validation_loss = np.array([[2.0, 1.0], [0.8, 0.4]])
     global_accuracy = np.array([[0.1, 0.3], [0.5, 0.7]])
+    global_loss = np.array([[2.1, 1.1], [0.9, 0.5]])
     train_loss = np.array([[1.8, 0.9], [0.7, 0.3]])
     np.save(tmp_path / "validation_accuracy.npy", validation_accuracy)
     np.save(tmp_path / "validation_loss.npy", validation_loss)
     np.save(tmp_path / "global_accuracy.npy", global_accuracy)
+    np.save(tmp_path / "global_loss.npy", global_loss)
     np.save(tmp_path / "train_loss.npy", train_loss)
 
     loader = MetricLoader(tmp_path)
@@ -88,6 +90,10 @@ def test_metric_loader_reads_current_engine_metric_names(tmp_path):
     np.testing.assert_allclose(
         loader.load_values(MetricKey.GLOBAL_ACCURACY),
         global_accuracy,
+    )
+    np.testing.assert_allclose(
+        loader.load_values(MetricKey.GLOBAL_LOSS),
+        global_loss,
     )
     np.testing.assert_allclose(loader.load_values(MetricKey.TRAIN_LOSS), train_loss)
 

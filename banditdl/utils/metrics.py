@@ -13,6 +13,7 @@ class MetricKey(StrEnum):
     VALIDATION_ACCURACY = "validation_accuracy"
     VALIDATION_LOSS = "validation_loss"
     GLOBAL_ACCURACY = "global_accuracy"
+    GLOBAL_LOSS = "global_loss"
     TRAIN_LOSS = "train_loss"
     TEST_ACCURACY = "test_accuracy"
     REWARD_ALGORITHM = "reward_algorithm"
@@ -43,6 +44,7 @@ NPY_CANDIDATES = {
     MetricKey.VALIDATION_ACCURACY: ("validation_accuracy.npy",),
     MetricKey.VALIDATION_LOSS: ("validation_loss.npy",),
     MetricKey.GLOBAL_ACCURACY: ("global_accuracy.npy",),
+    MetricKey.GLOBAL_LOSS: ("global_loss.npy",),
     MetricKey.TRAIN_LOSS: ("train_loss.npy",),
     MetricKey.TEST_ACCURACY: ("test_accuracy.npy",),
 }
@@ -55,6 +57,7 @@ HIGHER_IS_WORSE = {
     MetricKey.CONSENSUS_DRIFT,
     MetricKey.GRADIENT_NORMS,
     MetricKey.VALIDATION_LOSS,
+    MetricKey.GLOBAL_LOSS,
     MetricKey.TRAIN_LOSS,
 }
 
@@ -221,6 +224,7 @@ class MetricLoader:
             MetricKey.VALIDATION_ACCURACY,
             MetricKey.VALIDATION_LOSS,
             MetricKey.GLOBAL_ACCURACY,
+            MetricKey.GLOBAL_LOSS,
         }:
             try:
                 source_steps = self._load_evaluation_steps()

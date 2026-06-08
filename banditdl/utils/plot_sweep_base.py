@@ -16,6 +16,7 @@ DEFAULT_PLOT_METRICS: tuple[str, ...] = (
     "validation_accuracy",
     "validation_loss",
     "global_accuracy",
+    "global_loss",
     "train_loss",
     "reward_algorithm",
     "reward_oracle",

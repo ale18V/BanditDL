@@ -296,6 +296,17 @@ def plot_all(run_dir: Path, plots_dir: Path, run_label: str | None = None) -> No
     )
 
     plotter.plot(
+        "global_loss.png",
+        [
+            Panel(
+                "Subsampled Global Test Loss",
+                "Loss",
+                _node_series(MetricKey.GLOBAL_LOSS, interpolate_eval=True),
+            )
+        ],
+    )
+
+    plotter.plot(
         "validation_loss.png",
         [
             Panel(

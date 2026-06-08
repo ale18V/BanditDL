@@ -110,6 +110,7 @@ class ResultTracker:
             "validation_accuracy.npy": (nb_evals, cfg.nb_honests),
             "validation_loss.npy": (nb_evals, cfg.nb_honests),
             "global_accuracy.npy": (nb_evals, cfg.nb_honests),  # Periodic subsampled eval
+            "global_loss.npy": (nb_evals, cfg.nb_honests),
             "train_loss.npy": (cfg.effective_rounds + 1, cfg.nb_honests),
             "neighbor_disagreement.npy": (cfg.effective_rounds, cfg.nb_honests),
             "consensus_drift.npy": (cfg.effective_rounds, cfg.nb_honests),
@@ -155,8 +156,11 @@ class ResultTracker:
         )
         if should_evaluate and step not in self.validation_steps:
             eval_idx = len(self.validation_steps)
-            accs = [w.compute_validation_accuracy() for w in honest_workers]
-            v_losses = [w.compute_validation_loss() for w in honest_workers]
+            validation_metrics = [
+                w.compute_metrics_on_loader(w.loaders["validation"]) for w in honest_workers
+            ]
+            accs = [accuracy for accuracy, _ in validation_metrics]
+            v_losses = [loss for _, loss in validation_metrics]
 
             self.mmaps["evaluation_steps.npy"][eval_idx] = step
             self.mmaps["validation_accuracy.npy"][eval_idx] = np.array(accs, dtype="float32")
@@ -164,15 +168,20 @@ class ResultTracker:
 
             # Periodic Global Generalization (Subsampled)
             if self.test_loader_sub:
-                g_accs = [w.compute_accuracy_on_loader(self.test_loader_sub) for w in honest_workers]
+                global_metrics = [
+                    w.compute_metrics_on_loader(self.test_loader_sub) for w in honest_workers
+                ]
+                g_accs = [accuracy for accuracy, _ in global_metrics]
+                g_losses = [loss for _, loss in global_metrics]
                 self.mmaps["global_accuracy.npy"][eval_idx] = np.array(g_accs, dtype="float32")
+                self.mmaps["global_loss.npy"][eval_idx] = np.array(g_losses, dtype="float32")
                 logger.info(f"Step {step} | Mean Local Acc: {sum(accs)/len(accs):.4f} | Mean Global Acc (sub): {sum(g_accs)/len(g_accs):.4f}")
 
             mean_acc, mean_v = sum(accs) / len(accs), sum(v_losses) / len(v_losses)
             self.validation_steps.append(step)
 
             if eval_idx % 5 == 0:
-                for name in ["evaluation_steps.npy", "validation_accuracy.npy", "validation_loss.npy", "global_accuracy.npy"]:
+                for name in ["evaluation_steps.npy", "validation_accuracy.npy", "validation_loss.npy", "global_accuracy.npy", "global_loss.npy"]:
                     self.mmaps[name].flush()
 
         if _should_log_step(step, self.cfg.effective_rounds):

@@ -149,17 +149,26 @@ class HonestWorker(BaseWorker):
         return flatten(self.model.parameters())
 
     @torch.no_grad()
-    def compute_accuracy_on_loader(self, data_loader):
+    def compute_metrics_on_loader(self, data_loader):
         self.model.eval()
         total = 0
         correct = 0
+        total_loss = 0.0
         for inputs, targets in data_loader:
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             outputs = self.model(inputs)
             _, predicted = torch.max(outputs.data, 1)
+            loss_value = self.loss(outputs, targets)
+            batch_size = targets.size(0)
             total += targets.size(0)
             correct += (predicted == targets).sum().item()
-        return correct / total
+            total_loss += float(loss_value.item()) * batch_size
+        return correct / total, total_loss / total
+
+    @torch.no_grad()
+    def compute_accuracy_on_loader(self, data_loader):
+        accuracy, _ = self.compute_metrics_on_loader(data_loader)
+        return accuracy
 
     @torch.no_grad()
     def compute_validation_accuracy(self):
@@ -167,17 +176,8 @@ class HonestWorker(BaseWorker):
 
     @torch.no_grad()
     def compute_loss_on_loader(self, data_loader):
-        self.model.eval()
-        total = 0
-        total_loss = 0.0
-        for inputs, targets in data_loader:
-            inputs, targets = inputs.to(self.device), targets.to(self.device)
-            outputs = self.model(inputs)
-            loss_value = self.loss(outputs, targets)
-            batch_size = targets.size(0)
-            total += batch_size
-            total_loss += float(loss_value.item()) * batch_size
-        return total_loss / total
+        _, loss = self.compute_metrics_on_loader(data_loader)
+        return loss
 
     @torch.no_grad()
     def compute_validation_loss(self):

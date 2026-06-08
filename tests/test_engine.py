@@ -19,12 +19,16 @@ class _FakeWorker:
     def __init__(self):
         self.worker_id = 0
         self.train_loss_calls = 0
+        self.loaders = {"validation": object()}
 
     def compute_validation_accuracy(self):
         return 0.5
 
     def compute_validation_loss(self):
         return 1.5
+
+    def compute_metrics_on_loader(self, loader):
+        return 0.5, 1.5
 
     def compute_train_loss(self):
         self.train_loss_calls += 1
@@ -115,6 +119,7 @@ def test_tracker_records_validation_checkpoints_and_roundwise_train_loss(tmp_pat
     np.testing.assert_allclose(np.load(tmp_path / "evaluation_steps.npy"), [0, 2, 4, 5])
     assert np.load(tmp_path / "validation_accuracy.npy").shape == (4, 1)
     assert np.load(tmp_path / "validation_loss.npy").shape == (4, 1)
+    assert np.load(tmp_path / "global_loss.npy").shape == (4, 1)
     np.testing.assert_allclose(
         np.load(tmp_path / "train_loss.npy")[:, 0],
         np.arange(1, 7, dtype=float),
@@ -123,12 +128,18 @@ def test_tracker_records_validation_checkpoints_and_roundwise_train_loss(tmp_pat
 
 class _EvaluationWorker:
     worker_id = 0
+    loaders = {"validation": object()}
 
     def compute_validation_accuracy(self):
         return 0.75
 
     def compute_validation_loss(self):
         return 0.5
+
+    def compute_metrics_on_loader(self, loader):
+        if loader == "global":
+            return 0.8, 0.3
+        return 0.75, 0.5
 
     def compute_train_loss(self):
         return 0.4
@@ -156,6 +167,20 @@ def test_final_evaluation_is_saved_when_rounds_are_not_divisible_by_delta(tmp_pa
     assert tracker.validation_steps == [0, 20, 25]
     assert accuracy.shape == (3, 2)
     np.testing.assert_allclose(accuracy[-1], 0.75)
+
+
+def test_subsampled_global_loss_is_saved_with_accuracy(tmp_path):
+    cfg = BanditDLConfig()
+    cfg.topology.nodes = 1
+    cfg.optimization.rounds = 1
+    cfg.evaluation.evaluation_delta = 1
+    worker = _EvaluationWorker()
+
+    with ResultTracker(cfg, tmp_path, test_loader_sub="global") as tracker:
+        tracker.evaluate_step(0, [worker])
+
+    np.testing.assert_allclose(np.load(tmp_path / "global_accuracy.npy")[0], [0.8])
+    np.testing.assert_allclose(np.load(tmp_path / "global_loss.npy")[0], [0.3])
 
 
 def test_final_test_accuracy_has_a_dedicated_metric_file(tmp_path):

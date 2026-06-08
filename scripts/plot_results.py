@@ -44,7 +44,7 @@ def plot_runs(
         data = loader.load(
             metric,
             interpolate_eval=metric
-            in {"validation_accuracy", "validation_loss", "global_accuracy"},
+            in {"validation_accuracy", "validation_loss", "global_accuracy", "global_loss"},
         )
         values = data.values
         if values.ndim > 1:
@@ -104,6 +104,7 @@ def main() -> None:
             "validation_accuracy",
             "validation_loss",
             "global_accuracy",
+            "global_loss",
             "train_loss",
             "test_accuracy",
             "reward_algorithm",
