@@ -25,8 +25,13 @@ DEFAULT_PLOT_METRICS: tuple[str, ...] = (
     "consensus_drift",
     "gradient_norms",
     "sampler_kl_to_uniform",
+    "sampler_entropy",
     "sampler_min_probability",
     "sampler_max_probability",
+    "sampler_weight_kl_to_uniform",
+    "sampler_weight_entropy",
+    "sampler_min_weight",
+    "sampler_max_weight",
 )
 
 DEFAULT_DIRECTIONS: tuple[str, ...] = ("avg", "worse", "best")

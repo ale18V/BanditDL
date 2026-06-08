@@ -112,6 +112,16 @@ class ResultTracker:
             "neighbor_disagreement.npy": (cfg.effective_rounds, cfg.nb_honests),
             "consensus_drift.npy": (cfg.effective_rounds, cfg.nb_honests),
             "gradient_norms.npy": (cfg.effective_rounds, cfg.nb_honests),
+            "sampler_weights.npy": (
+                cfg.effective_rounds,
+                cfg.nb_honests,
+                cfg.topology.nodes,
+            ),
+            "sampler_probabilities.npy": (
+                cfg.effective_rounds,
+                cfg.nb_honests,
+                cfg.topology.nodes,
+            ),
         }
 
         for name, shape in mmap_configs.items():
@@ -124,26 +134,12 @@ class ResultTracker:
         self.selected_neighbor_history, self.oracle_neighbor_history = [], []
         self.reward_min_history, self.reward_max_history = [], []
 
-        self.prob_file = result_dir / "sampler_probabilities.npy"
-        self.probs_mmap = None
-        if cfg.effective_rounds > 0:
-            self.probs_mmap = numpy.lib.format.open_memmap(
-                self.prob_file,
-                dtype="float32",
-                mode="w+",
-                shape=(cfg.effective_rounds, cfg.nb_honests, cfg.topology.nodes),
-            )
-            self.probs_mmap[:] = np.nan
-            self.probs_mmap.flush()
-
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         for mmap in self.mmaps.values():
             mmap.flush()
-        if self.probs_mmap is not None:
-            self.probs_mmap.flush()
 
     def save_audit(self, audit_data: dict):
         import json
@@ -204,14 +200,11 @@ class ResultTracker:
             self.mmaps["neighbor_disagreement.npy"][step] = dis_val
             self.mmaps["consensus_drift.npy"][step] = con_val
 
-    def record_probabilities(self, step, honest_workers):
-        if self.probs_mmap is not None and step < self.cfg.effective_rounds:
-            probs = np.stack(
-                [_full_sampler_probability_vector(w, self.cfg.topology.nodes) for w in honest_workers]
-            )
-            self.probs_mmap[step] = probs.astype("float32")
-            if step % 10 == 0:
-                self.probs_mmap.flush()
+    def record_sampler_diagnostics(self, step, weights, probabilities):
+        if step >= self.cfg.effective_rounds:
+            return
+        self.mmaps["sampler_weights.npy"][step] = weights
+        self.mmaps["sampler_probabilities.npy"][step] = probabilities
 
     def record_rewards(self, alg, ora, sel, ora_n, r_min, r_max):
         self.algorithm_reward_history.append(alg.copy())
@@ -225,8 +218,6 @@ class ResultTracker:
         """Flush all mmaps and save dynamic reward histories."""
         for mmap in self.mmaps.values():
             mmap.flush()
-        if self.probs_mmap is not None:
-            self.probs_mmap.flush()
 
         d = self.result_dir
         if self.algorithm_reward_history:
@@ -312,8 +303,14 @@ def _init_workers(cfg: BanditDLConfig, train_dict, test_dict, device: str):
         s_ctx = SamplerContext(
             worker_id,
             cfg.topology.nodes,
-            1,
-            cfg.effective_rounds + 1,
+            max(
+                1,
+                min(
+                    cfg.topology.nodes - 1,
+                    round((cfg.topology.nodes - 1) * cfg.topology.sampling),
+                ),
+            ),
+            cfg.effective_rounds,
             cfg.seed + worker_id,
         )
         config = replace(
@@ -354,13 +351,15 @@ def _dynamic_candidate_weights(w, honest_weights, byz_by_id):
     return weights
 
 
-def _full_sampler_probability_vector(worker, nb_total: int) -> np.ndarray:
-    pop = [i for i in range(nb_total) if i != worker.worker_id]
-    probs_by_arm = worker.neighbor_sampler.probabilities(pop, worker.nb_neighbors)
-    row = np.zeros(nb_total, dtype=float)
-    for arm in pop:
-        row[arm] = float(probs_by_arm[arm])
-    return row
+def _full_sampler_diagnostics(worker, nb_total: int) -> tuple[np.ndarray, np.ndarray]:
+    population = [i for i in range(nb_total) if i != worker.worker_id]
+    diagnostics = worker.neighbor_sampler.diagnostics(population, worker.nb_neighbors)
+    weights = np.zeros(nb_total, dtype=float)
+    probabilities = np.zeros(nb_total, dtype=float)
+    for arm in population:
+        weights[arm] = diagnostics.weights[arm]
+        probabilities[arm] = diagnostics.probabilities[arm]
+    return weights, probabilities
 
 
 def _step_dynamic(
@@ -368,9 +367,14 @@ def _step_dynamic(
 ):
     selected_round = np.full((cfg.nb_honests, honest_workers[0].nb_neighbors), -1, dtype=int)
     r_min_round, r_max_round = np.full(cfg.nb_honests, np.nan), np.full(cfg.nb_honests, np.nan)
+    weight_rows = np.zeros((cfg.nb_honests, cfg.topology.nodes), dtype=float)
+    probability_rows = np.zeros_like(weight_rows)
 
     for w in honest_workers:
         neighbor_indices = w._sample_neighbors()
+        weight_rows[w.worker_id], probability_rows[w.worker_id] = (
+            _full_sampler_diagnostics(w, cfg.topology.nodes)
+        )
         c_weights = _dynamic_candidate_weights(w, h_weights, byz_by_id)
         sel_ids = [i for i in neighbor_indices if i in c_weights]
 
@@ -387,9 +391,10 @@ def _step_dynamic(
             cum_alg_r[w.worker_id] += _mean_selected_reward(s_rewards)
 
         w.num_selected_byz.append(len([i for i in sel_ids if i >= cfg.nb_honests]))
-        w.observe_neighbors(sel_ids, n_weights)
+        w.observe_neighbors(sel_ids, s_rewards)
         w.aggregate(n_weights)
 
+    tracker.record_sampler_diagnostics(step, weight_rows, probability_rows)
     ora_n_round, ora_r_round = [], []
     for w in honest_workers:
         oids, oreward = _best_fixed_subset(cum_arm_r[w.worker_id], w.worker_id, w.nb_neighbors)
@@ -462,7 +467,6 @@ def run_experiment(
                 for w in honest_workers:
                     w.train()
                 tracker.record_gradient_norms(step, honest_workers)
-                tracker.record_probabilities(step, honest_workers)
                 h_weights = [w.pull(None) for w in honest_workers]
 
                 # Inform Byzantines once per round

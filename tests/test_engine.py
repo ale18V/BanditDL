@@ -39,18 +39,27 @@ def test_mean_selected_reward_is_cardinality_normalized():
     assert _mean_selected_reward([]) == 0.0
 
 
-def test_probability_file_is_preallocated_for_honest_workers_with_nan(tmp_path):
+def test_sampler_diagnostics_are_progressively_written(tmp_path):
     cfg = BanditDLConfig()
     cfg.topology.nodes = 4
     cfg.adversary.byzcount = 1
     cfg.optimization.rounds = 2
 
-    with ResultTracker(cfg, tmp_path):
-        pass
+    with ResultTracker(cfg, tmp_path) as tracker:
+        tracker.record_sampler_diagnostics(
+            0,
+            np.full((3, 4), 0.25),
+            np.full((3, 4), 0.25),
+        )
 
     probabilities = np.load(tmp_path / "sampler_probabilities.npy")
+    weights = np.load(tmp_path / "sampler_weights.npy")
     assert probabilities.shape == (2, 3, 4)
-    assert np.isnan(probabilities).all()
+    np.testing.assert_allclose(probabilities[0], 0.25)
+    assert np.isnan(probabilities[1]).all()
+    assert weights.shape == (2, 3, 4)
+    np.testing.assert_allclose(weights[0], 0.25)
+    assert np.isnan(weights[1]).all()
 
 
 def test_tracker_records_validation_checkpoints_and_roundwise_train_loss(tmp_path):

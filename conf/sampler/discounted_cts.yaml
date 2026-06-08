@@ -1,0 +1,4 @@
+name: discounted_cts
+reward: parameter_distance
+params:
+  gamma: 0.99

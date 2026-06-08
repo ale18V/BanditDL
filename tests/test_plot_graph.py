@@ -16,7 +16,10 @@ matplotlib.use("Agg")  # headless backend for CI
 from banditdl.utils.plot_graph import (  # noqa: E402
     _filter_edges,
     _load_weights,
+    mutual_collaboration,
     plot_clustering_graph,
+    plot_collaboration_embedding,
+    spectral_embedding,
 )
 
 
@@ -61,6 +64,24 @@ def test_filter_edges_directed_topk_keeps_outgoing_only():
     # Undirected symmetrizes the kept mask, so the 0<->1 edge survives both ways.
     assert undirected[0, 1] != 0.0
     assert undirected[1, 0] != 0.0
+
+
+def test_filter_edges_relative_threshold_uses_each_outgoing_distribution():
+    weights = np.array(
+        [
+            [0.0, 0.8, 0.1, 0.1],
+            [0.1, 0.0, 0.2, 0.7],
+            [0.3, 0.3, 0.0, 0.3],
+            [0.1, 0.1, 0.8, 0.0],
+        ]
+    )
+
+    filtered = _filter_edges(weights, directed=True, relative_threshold=1.0)
+
+    assert filtered[0, 1] == 0.8
+    assert filtered[1, 3] == 0.7
+    assert filtered[2].sum() == 0.0
+    assert filtered[3, 2] == 0.8
 
 
 def test_load_weights_sampler_probability_is_directed_and_unsymmetrized(tmp_path):
@@ -130,6 +151,39 @@ def test_load_weights_sampler_probability_averages_seed_probabilities(tmp_path):
     np.testing.assert_allclose(weights, np.array([[0.0, 0.6], [0.4, 0.0]]))
 
 
+def test_load_sampler_weights_averages_final_ten_percent(tmp_path):
+    results = tmp_path / "results"
+    results.mkdir()
+    weights = np.zeros((20, 2, 2))
+    weights[-2:] = [[[0.0, 0.8], [0.6, 0.0]], [[0.0, 1.0], [0.8, 0.0]]]
+    np.save(results / "sampler_weights.npy", weights)
+
+    loaded, directed = _load_weights(results, "sampler_weight", n_honest=2)
+
+    assert directed is True
+    np.testing.assert_allclose(loaded, [[0.0, 0.9], [0.7, 0.0]])
+
+
+def test_mutual_collaboration_penalizes_one_sided_weights():
+    weights = np.array([[0.0, 0.8, 0.8], [0.8, 0.0, 0.1], [0.0, 0.1, 0.0]])
+
+    collaboration = mutual_collaboration(weights)
+
+    assert collaboration[0, 1] == 0.8
+    assert collaboration[0, 2] == 0.0
+    assert collaboration[1, 2] == 0.1
+
+
+def test_spectral_embedding_is_two_dimensional_and_deterministic():
+    collaboration = np.array([[0.0, 0.8, 0.1], [0.8, 0.0, 0.2], [0.1, 0.2, 0.0]])
+
+    first = spectral_embedding(collaboration)
+    second = spectral_embedding(collaboration)
+
+    assert first.shape == (3, 2)
+    np.testing.assert_allclose(first, second)
+
+
 def test_load_weights_neighbor_disagreement_averages_seed_similarities(tmp_path):
     results = tmp_path / "results"
     results.mkdir()
@@ -165,6 +219,26 @@ def test_plot_clustering_graph_directed_render(tmp_path):
         weight_source="sampler_probability",
         threshold=0.25,
     )
+    assert out.is_file()
+    assert out.stat().st_size > 0
+
+
+def test_plot_collaboration_embedding_render(tmp_path):
+    results = tmp_path / "results"
+    results.mkdir()
+    weights = np.array(
+        [
+            [[0.0, 0.8, 0.2], [0.8, 0.0, 0.2], [0.2, 0.2, 0.0]],
+            [[0.0, 0.9, 0.1], [0.9, 0.0, 0.1], [0.1, 0.1, 0.0]],
+        ]
+    )
+    np.save(results / "sampler_weights.npy", weights)
+
+    out = plot_collaboration_embedding(
+        results,
+        tmp_path / "plots" / "embedding.png",
+    )
+
     assert out.is_file()
     assert out.stat().st_size > 0
 
