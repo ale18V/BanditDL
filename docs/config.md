@@ -164,10 +164,10 @@ uv run -m banditdl \
   optimization.rounds=500
 ```
 
-Use independently initialized workers:
+Force identical initialization:
 
 ```bash
-uv run -m banditdl identical_initialization=false
+uv run -m banditdl identical_initialization=true
 ```
 
 Hydra multirun:

@@ -84,7 +84,7 @@ class BanditDLConfig:
     seed: int = 42
     num_seeds: int = 1
     device: str = "auto"
-    identical_initialization: bool = True
+    identical_initialization: bool = False
     sampler: dict[str, Any] = field(default_factory=dict)
 
     @property

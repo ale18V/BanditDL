@@ -13,7 +13,7 @@ defaults:
 seed: 123
 num_seeds: 1
 device: cpu
-identical_initialization: true
+identical_initialization: false
 
 hydra:
   run:

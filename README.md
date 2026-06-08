@@ -216,8 +216,8 @@ uv run -m banditdl --cfg job
 - `seed`: base random seed for one configured trial.
 - `num_seeds`: number of consecutive seeds to run for each configured trial. Metrics and plots aggregate seed results as the outermost reduction.
 - `device`: `auto`, `cpu`, or a torch device string such as `cuda`.
-- `identical_initialization`: when `true`, all honest workers start from the
-  same model weights. Set it to `false` for independently initialized workers.
+- `identical_initialization`: defaults to `false`, so honest workers start from
+  independently initialized model weights. Set it to `true` to force shared initialization.
 
 ### Dataset Config
 

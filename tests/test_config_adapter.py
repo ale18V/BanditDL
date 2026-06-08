@@ -42,7 +42,7 @@ def _base_cfg():
             "evaluation": {"evaluation_delta": 20},
             "seed": 123,
             "device": "cpu",
-            "identical_initialization": True,
+            "identical_initialization": False,
         }
     )
 
@@ -53,7 +53,7 @@ def test_build_dynamic_engine_config_uses_sampler_group():
     assert run_cfg.config.resolved_sampler_name == "epsilon_greedy"
     assert run_cfg.config.sampler["params"] == {"epsilon": 0.1, "initial_value": 0.0}
     assert run_cfg.config.optimization.rounds == 200
-    assert run_cfg.config.identical_initialization is True
+    assert run_cfg.config.identical_initialization is False
 
 
 def test_build_engine_config_accepts_non_identical_initialization():
