@@ -12,6 +12,7 @@ those directories into the public trial result directory and keeps stacked
 from __future__ import annotations
 
 import json
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -99,6 +100,7 @@ def aggregate_seed_results(result_dir: Path, seeds: list[int]) -> None:
     result_dir.mkdir(parents=True, exist_ok=True)
     _write_seed_metadata(result_dir, seeds, seed_dirs)
     _aggregate_numpy_metrics(result_dir, seed_dirs)
+    _aggregate_jsonl_metrics(result_dir, seeds, seed_dirs)
 
 
 def _write_seed_metadata(result_dir: Path, seeds: list[int], seed_dirs: list[Path]) -> None:
@@ -141,3 +143,25 @@ def _aggregate_numpy_metrics(result_dir: Path, seed_dirs: list[Path]) -> None:
                 aggregate_path.unlink()
             continue
         np.save(aggregate_path, np.nanmean(stacked.astype(float), axis=0))
+
+
+def _aggregate_jsonl_metrics(result_dir: Path, seeds: list[int], seed_dirs: list[Path]) -> None:
+    filename = "sampler_states.jsonl"
+    paths = [seed_dir / filename for seed_dir in seed_dirs]
+    existing = [path for path in paths if path.exists()]
+    if not existing:
+        return
+    if len(existing) != len(paths):
+        missing = [str(path) for path in paths if not path.exists()]
+        raise FileNotFoundError(f"JSONL file {filename!r} is missing for some seeds: {missing}")
+
+    if len(paths) == 1:
+        shutil.copyfile(paths[0], result_dir / filename)
+        return
+
+    with (result_dir / "sampler_states_by_seed.jsonl").open("w") as out:
+        for seed, path in zip(seeds, paths, strict=True):
+            for line in path.read_text().splitlines():
+                row = json.loads(line)
+                row["seed"] = seed
+                out.write(json.dumps(row, sort_keys=True) + "\n")

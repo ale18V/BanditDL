@@ -98,6 +98,18 @@ def _top_k_mass(arms, selected, k) -> dict[Any, float]:
     return {arm: (1.0 / k if arm in selected else 0.0) for arm in arms}
 
 
+def _json_values(values) -> list[float | str | None]:
+    result = []
+    for value in np.asarray(values, dtype=float).tolist():
+        if math.isnan(value):
+            result.append(None)
+        elif math.isinf(value):
+            result.append("inf" if value > 0 else "-inf")
+        else:
+            result.append(float(value))
+    return result
+
+
 class UniformNeighborSampler:
     """Uniformly sample neighbors without replacement."""
 
@@ -120,6 +132,9 @@ class UniformNeighborSampler:
 
     def probabilities(self, population, k=None) -> dict[Any, float]:
         return self.diagnostics(population, k or 1).probabilities
+
+    def state(self) -> dict[str, Any]:
+        return {"sampler": "uniform"}
 
 
 class EpsilonGreedyNeighborSampler:
@@ -206,6 +221,20 @@ class EpsilonGreedyNeighborSampler:
 
     def probabilities(self, population, k=None) -> dict[Any, float]:
         return self.diagnostics(population, k or 1).probabilities
+
+    def state(self) -> dict[str, Any]:
+        expectations = {}
+        if self._mab is not None:
+            expectations = self._mab.predict_expectations()
+        arms = sorted(self._arms)
+        return {
+            "sampler": "epsilon_greedy",
+            "epsilon": self.epsilon,
+            "initial_value": self.initial_value,
+            "seed": self.seed,
+            "arms": arms,
+            "expectations": [float(expectations.get(arm, self.initial_value)) for arm in arms],
+        }
 
 
 MultiArmedBanditSampler = EpsilonGreedyNeighborSampler
@@ -326,6 +355,22 @@ class Exp3NeighborSampler:
     def probabilities(self, population, k=None) -> dict[Any, float]:
         return self.diagnostics(population, k or 1).probabilities
 
+    def state(self) -> dict[str, Any]:
+        gamma = None if not self._arms else self._resolve_gamma(len(self._arms))
+        return {
+            "sampler": "exp3",
+            "gamma": self.gamma,
+            "resolved_gamma": gamma,
+            "lower": self.lower,
+            "amplitude": self.amplitude,
+            "seed": self.seed,
+            "horizon": self.horizon,
+            "diagnostic_samples": self.diagnostic_samples,
+            "arms": list(self._arms),
+            "weights": _json_values(self._weights),
+            "probabilities": _json_values(self._probabilities),
+        }
+
 
 class CUCBNeighborSampler:
     def __init__(self, exploration=2.0, discount=1.0, seed=123456):
@@ -402,6 +447,19 @@ class CUCBNeighborSampler:
     def probabilities(self, population, k=None) -> dict[Any, float]:
         return self.diagnostics(population, k or 1).probabilities
 
+    def state(self) -> dict[str, Any]:
+        return {
+            "sampler": "cucb",
+            "exploration": self.exploration,
+            "discount": self.discount,
+            "time": self._time,
+            "arms": list(self._arms),
+            "counts": _json_values(self._counts),
+            "reward_sums": _json_values(self._reward_sums),
+            "last_scores": _json_values(self._last_scores),
+            "last_selected": list(self._last_selected),
+        }
+
 
 class CTSNeighborSampler:
     def __init__(
@@ -476,6 +534,17 @@ class CTSNeighborSampler:
 
     def probabilities(self, population, k=None) -> dict[Any, float]:
         return self.diagnostics(population, k or 1).probabilities
+
+    def state(self) -> dict[str, Any]:
+        return {
+            "sampler": "cts",
+            "discount": self.discount,
+            "diagnostic_samples": self.diagnostic_samples,
+            "arms": list(self._arms),
+            "successes": _json_values(self._successes),
+            "failures": _json_values(self._failures),
+            "last_scores": _json_values(self._last_scores),
+        }
 
 
 # Backwards-compatible alias for older tests/imports.

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 import torch
 
@@ -73,6 +75,21 @@ def test_sampler_probability_distributions_sum_to_one():
         assert sum(diagnostics.probabilities.values()) == pytest.approx(1.0)
         assert set(diagnostics.weights) == set(population)
         assert set(diagnostics.probabilities) == set(population)
+
+
+def test_sampler_state_is_json_safe():
+    population = [1, 2, 3]
+    for sampler in [
+        make_neighbor_sampler("uniform"),
+        make_neighbor_sampler("epsilon_greedy"),
+        make_neighbor_sampler("exp3", context=SamplerContext(0, 4, 2, 100, 1)),
+        make_neighbor_sampler("cucb"),
+        make_neighbor_sampler("cts"),
+    ]:
+        sampler.sample(population, 2)
+        state = sampler.state()
+        json.dumps(state)
+        assert state["sampler"]
 
 
 def test_parameter_distance_reward():
