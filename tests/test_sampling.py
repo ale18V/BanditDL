@@ -9,6 +9,7 @@ from banditdl.core.sampling import (
     MultiArmedBanditSampler,
     ParameterDistanceReward,
     SamplerContext,
+    UpdateCosineSimilarityReward,
     make_neighbor_sampler,
     make_reward_strategy,
 )
@@ -84,6 +85,7 @@ def test_parameter_distance_reward():
 def test_reward_strategy_factory():
     assert isinstance(make_reward_strategy("parameter_distance"), ParameterDistanceReward)
     assert isinstance(make_reward_strategy("cosine_similarity"), CosineSimilarityReward)
+    assert isinstance(make_reward_strategy("update_cosine_similarity"), UpdateCosineSimilarityReward)
 
 
 def test_cosine_similarity_reward_is_shifted_to_unit_interval():

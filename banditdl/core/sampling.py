@@ -52,11 +52,17 @@ class CosineSimilarityReward(RewardStrategy):
         return ((similarities + 1) / 2).clamp(0, 1).tolist()
 
 
+class UpdateCosineSimilarityReward(CosineSimilarityReward):
+    """Cosine reward on last local model update vectors, not raw parameters."""
+
+
 def make_reward_strategy(name):
     if name == "parameter_distance":
         return ParameterDistanceReward()
     if name == "cosine_similarity":
         return CosineSimilarityReward()
+    if name == "update_cosine_similarity":
+        return UpdateCosineSimilarityReward()
     raise ValueError(f"Unknown bandit reward strategy: {name}")
 
 

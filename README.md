@@ -268,13 +268,14 @@ Sampler configs are in `conf/sampler/`. They are used by dynamic topologies.
 
 - `name`: sampler implementation: `uniform`, `epsilon_greedy`, `exp3`, `cucb`,
   `cts`, `discounted_cucb`, or `discounted_cts`.
-- `reward`: `parameter_distance` or `cosine_similarity`.
+- `reward`: `parameter_distance`, `cosine_similarity`, or
+  `update_cosine_similarity`.
 - `params`: sampler-specific parameters such as `epsilon`, `gamma`, or
   `exploration`.
 
 Shared runtime facts such as `topology.nodes`, sampled-neighbor count, `optimization.rounds`, and seed are passed to samplers through runtime context rather than duplicated in sampler config.
 The reward can be overridden independently when comparing samplers, for example
-`sampler=uniform sampler.reward=cosine_similarity`.
+`sampler=cts sampler.reward=update_cosine_similarity`.
 
 ### Adversary Config
 
@@ -581,6 +582,7 @@ Current bandit feedback:
 - reward is selected through a strategy object,
 - `parameter_distance` uses `1 / (1 + parameter_distance)` against the local model before aggregation.
 - `cosine_similarity` maps parameter cosine similarity from `[-1, 1]` to `[0, 1]`.
+- `update_cosine_similarity` applies the same cosine reward to each node's last model delta.
 - discounted CUCB and CTS exponentially discount evidence by `discount`.
 
 Dynamic runs also save hindsight diagnostics for every sampler, including uniform:

@@ -6,6 +6,7 @@ from banditdl.experiments.config_schema import BanditDLConfig
 from banditdl.experiments.engine import (
     ResultTracker,
     _best_fixed_subset,
+    _dynamic_candidate_deltas,
     _mean_selected_reward,
 )
 
@@ -38,6 +39,22 @@ def test_best_fixed_subset_reward_is_cardinality_normalized():
 def test_mean_selected_reward_is_cardinality_normalized():
     assert _mean_selected_reward([1.0, 0.5, 0.0]) == pytest.approx(0.5)
     assert _mean_selected_reward([]) == 0.0
+
+
+def test_dynamic_candidate_deltas_use_last_model_updates():
+    worker = type("Worker", (), {"worker_id": 0})()
+    deltas = [
+        torch.tensor([1.0, 0.0]),
+        torch.tensor([0.0, 1.0]),
+        torch.tensor([-1.0, 0.0]),
+    ]
+
+    candidates = _dynamic_candidate_deltas(worker, deltas, {3: object()})
+
+    assert set(candidates) == {1, 2, 3}
+    torch.testing.assert_close(candidates[1], deltas[1])
+    torch.testing.assert_close(candidates[2], deltas[2])
+    torch.testing.assert_close(candidates[3], torch.zeros_like(deltas[0]))
 
 
 def test_sampler_diagnostics_are_progressively_written(tmp_path):

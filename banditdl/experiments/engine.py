@@ -13,6 +13,7 @@ from hydra.utils import instantiate
 
 from banditdl.core.sampling import (
     SamplerContext,
+    UpdateCosineSimilarityReward,
     make_neighbor_sampler,
     make_reward_strategy,
 )
@@ -351,6 +352,13 @@ def _dynamic_candidate_weights(w, honest_weights, byz_by_id):
     return weights
 
 
+def _dynamic_candidate_deltas(w, honest_deltas, byz_by_id):
+    deltas = {i: delta for i, delta in enumerate(honest_deltas) if i != w.worker_id}
+    for byz_id in byz_by_id:
+        deltas[byz_id] = torch.zeros_like(honest_deltas[w.worker_id])
+    return deltas
+
+
 def _full_sampler_diagnostics(worker, nb_total: int) -> tuple[np.ndarray, np.ndarray]:
     population = [i for i in range(nb_total) if i != worker.worker_id]
     diagnostics = worker.neighbor_sampler.diagnostics(population, worker.nb_neighbors)
@@ -363,7 +371,7 @@ def _full_sampler_diagnostics(worker, nb_total: int) -> tuple[np.ndarray, np.nda
 
 
 def _step_dynamic(
-    step, cfg, honest_workers, byz_by_id, h_weights, cum_arm_r, cum_alg_r, tracker
+    step, cfg, honest_workers, byz_by_id, h_weights, h_deltas, cum_arm_r, cum_alg_r, tracker
 ):
     selected_round = np.full((cfg.nb_honests, honest_workers[0].nb_neighbors), -1, dtype=int)
     r_min_round, r_max_round = np.full(cfg.nb_honests, np.nan), np.full(cfg.nb_honests, np.nan)
@@ -379,7 +387,16 @@ def _step_dynamic(
         sel_ids = [i for i in neighbor_indices if i in c_weights]
 
         candidate_ids = list(c_weights)
-        c_rewards = w.reward_strategy.score(w.pull(None), [c_weights[i] for i in candidate_ids])
+        if isinstance(w.reward_strategy, UpdateCosineSimilarityReward):
+            c_reward_vectors = _dynamic_candidate_deltas(w, h_deltas, byz_by_id)
+            local_reward_vector = h_deltas[w.worker_id]
+        else:
+            c_reward_vectors = c_weights
+            local_reward_vector = w.pull(None)
+        c_rewards = w.reward_strategy.score(
+            local_reward_vector,
+            [c_reward_vectors[i] for i in candidate_ids],
+        )
         rewards_by_id = dict(zip(candidate_ids, c_rewards, strict=True))
         cum_arm_r[w.worker_id, candidate_ids] += c_rewards
 
@@ -464,10 +481,12 @@ def run_experiment(
             tracker.evaluate_step(step, honest_workers)
             tracker.record_train_loss(step, honest_workers)
             if step < cfg.effective_rounds:
+                prev_weights = [w.pull(None).detach().clone() for w in honest_workers]
                 for w in honest_workers:
                     w.train()
                 tracker.record_gradient_norms(step, honest_workers)
                 h_weights = [w.pull(None) for w in honest_workers]
+                h_deltas = [current - previous for current, previous in zip(h_weights, prev_weights, strict=True)]
 
                 # Inform Byzantines once per round
                 for byz in byz_workers:
@@ -479,6 +498,7 @@ def run_experiment(
                     honest_workers,
                     byz_by_id,
                     h_weights,
+                    h_deltas,
                     cum_arm_r,
                     cum_alg_r,
                     tracker,

@@ -98,6 +98,8 @@ Important fields:
 - `sampler.params.*`
 
 The sampler horizon is `optimization.rounds`; do not duplicate it in sampler config.
+Available rewards are `parameter_distance`, `cosine_similarity`, and
+`update_cosine_similarity`.
 `discounted_cucb` and `discounted_cts` use `sampler.params.discount` as their
 evidence discount. CUCB also exposes `sampler.params.exploration`.
 
