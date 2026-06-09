@@ -35,6 +35,7 @@ class ByzantineWorker(BaseWorker):
     def inform(self, context):
         """Receive information from the engine to inform Byzantine behavior."""
 
+
 class HonestWorker(BaseWorker):
     """Shared training logic for honest decentralized workers."""
 
@@ -65,7 +66,8 @@ class HonestWorker(BaseWorker):
         self.model = getattr(models, config.model)()
         self.model.to(self.device)
         self.model_shapes = [param.shape for param in self.model.parameters()]
-        self.model_size = len(flatten(self.model.parameters()))
+        self._flat_params = flatten(self.model.parameters()).detach().clone()
+        self.model_size = len(self._flat_params)
 
         self.optimizer = torch.optim.SGD(
             self.model.parameters(), lr=self.initial_learning_rate, weight_decay=config.weight_decay
@@ -80,6 +82,7 @@ class HonestWorker(BaseWorker):
         self.num_selected_byz = []
         self._current_step = 0
         self.last_gradient_norm = float("nan")
+        self.last_train_loss = float("nan")
 
     def sample_batch(self, mode):
         try:
@@ -88,9 +91,11 @@ class HonestWorker(BaseWorker):
             self.iterators[mode] = iter(self.loaders[mode])
             return next(self.iterators[mode])
 
-    def backward_pass(self, inputs, targets):
+    def backward_pass(self, inputs, targets, *, record_loss=True):
         self.model.zero_grad()
         loss = self.loss(self.model(inputs), targets)
+        if record_loss:
+            self.last_train_loss = float(loss.detach().cpu().item())
         loss.backward()
         return flatten([param.grad for param in self.model.parameters()])
 
@@ -102,7 +107,9 @@ class HonestWorker(BaseWorker):
         if self.labelflipping:
             self.model.eval()
             targets_flipped = targets.sub(self.numb_labels - 1).mul(-1)
-            self.gradient_labelflipping = self.backward_pass(inputs, targets_flipped)
+            self.gradient_labelflipping = self.backward_pass(
+                inputs, targets_flipped, record_loss=False
+            )
             self.model.train()
 
         return self.backward_pass(inputs, targets)
@@ -139,14 +146,15 @@ class HonestWorker(BaseWorker):
             self.local_model_update(current_step)
         if gradient_norms:
             self.last_gradient_norm = sum(gradient_norms) / len(gradient_norms)
-        return flatten(self.model.parameters())
+        self._refresh_flat_params()
+        return self._flat_params
 
     def train(self) -> None:
         self.perform_local_step(self._current_step)
         self._current_step += 1
 
     def pull(self, context=None) -> torch.Tensor:
-        return flatten(self.model.parameters())
+        return self._flat_params
 
     @torch.no_grad()
     def compute_metrics_on_loader(self, data_loader):
@@ -196,3 +204,8 @@ class HonestWorker(BaseWorker):
         params = unflatten(params, self.model_shapes)
         for j, param in enumerate(self.model.parameters()):
             param.data = params[j].data.detach().clone()
+        self._refresh_flat_params()
+
+    def _refresh_flat_params(self) -> None:
+        with torch.no_grad():
+            self._flat_params.copy_(flatten(self.model.parameters()))

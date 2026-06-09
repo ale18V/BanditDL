@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+import torch
 from torch.utils.data import DataLoader, Subset
 
 from banditdl.data.partitioning import PartitionStrategy
@@ -43,6 +44,7 @@ def build_dataset_bundle(
 
     train, local_test = {}, {}
     distribution = {}
+    pin_memory = torch.cuda.is_available()
     for node, indices in partition.node_indices.items():
         train_indices, test_indices = _local_split(
             indices,
@@ -53,11 +55,13 @@ def build_dataset_bundle(
             Subset(pool.train_dataset, train_indices),
             batch_size=config.train_batch,
             shuffle=True,
+            pin_memory=pin_memory,
         )
         local_test[node] = DataLoader(
             Subset(pool.eval_dataset, test_indices),
             batch_size=config.test_batch,
             shuffle=False,
+            pin_memory=pin_memory,
         )
         distribution[node] = _distribution(pool.targets, indices)
 
@@ -65,6 +69,7 @@ def build_dataset_bundle(
         Subset(pool.eval_dataset, partition.global_test_indices),
         batch_size=config.test_batch,
         shuffle=False,
+        pin_memory=pin_memory,
     )
     tracking_size = max(
         1,
@@ -82,6 +87,7 @@ def build_dataset_bundle(
         Subset(pool.eval_dataset, partition.global_test_indices[:tracking_size]),
         batch_size=config.test_batch,
         shuffle=False,
+        pin_memory=pin_memory,
     )
     return DatasetBundle(
         train,

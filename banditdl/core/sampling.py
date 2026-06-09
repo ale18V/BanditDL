@@ -37,7 +37,12 @@ class RewardStrategy(ABC):
 
 class ParameterDistanceReward(RewardStrategy):
     def score(self, local_weights, neighbor_weights) -> list[float]:
-        return [1 / (1 + torch.norm(weight - local_weights).item()) for weight in neighbor_weights]
+        if not neighbor_weights:
+            return []
+        neighbors = torch.stack(neighbor_weights)
+        distances = torch.norm(neighbors - local_weights.unsqueeze(0), dim=1)
+        rewards = 1 / (1 + distances)
+        return rewards.detach().cpu().tolist()
 
 
 class CosineSimilarityReward(RewardStrategy):

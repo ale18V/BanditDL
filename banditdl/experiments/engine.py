@@ -190,11 +190,12 @@ class ResultTracker:
 
     def record_train_loss(self, step, honest_workers):
         if step <= self.cfg.effective_rounds:
-            losses = [w.compute_train_loss() for w in honest_workers]
+            losses = [float(getattr(w, "last_train_loss", np.nan)) for w in honest_workers]
             self.mmaps["train_loss.npy"][step] = np.array(losses, dtype="float32")
             if step % 10 == 0 or step == self.cfg.effective_rounds:
                 self.mmaps["train_loss.npy"].flush()
-            return sum(losses) / len(losses)
+            finite_losses = [loss for loss in losses if np.isfinite(loss)]
+            return float(np.mean(finite_losses)) if finite_losses else None
         return None
 
     def record_gradient_norms(self, step, honest_workers):
@@ -482,6 +483,14 @@ def run_experiment(
     )
 
     honest_workers = _init_workers(cfg, data.train, data.local_test, device)
+    first_param = next(honest_workers[0].model.parameters())
+    logger.info(
+        "runtime device: requested=%s, model=%s, cuda_available=%s, cuda_device=%s",
+        device,
+        first_param.device,
+        torch.cuda.is_available(),
+        torch.cuda.current_device() if torch.cuda.is_available() else None,
+    )
     bw_cfg = _build_worker_config(cfg, device)
     byz_workers = [
         ByzantineWorker(i, honest_workers[0].model_size, bw_cfg)

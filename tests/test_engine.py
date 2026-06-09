@@ -19,6 +19,7 @@ class _FakeWorker:
     def __init__(self):
         self.worker_id = 0
         self.train_loss_calls = 0
+        self.last_train_loss = float("nan")
         self.loaders = {"validation": object()}
 
     def compute_validation_accuracy(self):
@@ -114,6 +115,7 @@ def test_tracker_records_validation_checkpoints_and_roundwise_train_loss(tmp_pat
     with ResultTracker(cfg, tmp_path) as tracker:
         for step in range(cfg.effective_rounds + 1):
             tracker.evaluate_step(step, [worker])
+            worker.last_train_loss = float(step)
             tracker.record_train_loss(step, [worker])
 
     np.testing.assert_allclose(np.load(tmp_path / "evaluation_steps.npy"), [0, 2, 4, 5])
@@ -122,8 +124,23 @@ def test_tracker_records_validation_checkpoints_and_roundwise_train_loss(tmp_pat
     assert np.load(tmp_path / "global_loss.npy").shape == (4, 1)
     np.testing.assert_allclose(
         np.load(tmp_path / "train_loss.npy")[:, 0],
-        np.arange(1, 7, dtype=float),
+        np.arange(0, 6, dtype=float),
     )
+    assert worker.train_loss_calls == 0
+
+
+def test_tracker_ignores_missing_minibatch_train_loss_without_warning(tmp_path):
+    cfg = BanditDLConfig()
+    cfg.topology.nodes = 1
+    cfg.optimization.rounds = 1
+    worker = _FakeWorker()
+
+    with ResultTracker(cfg, tmp_path) as tracker:
+        value = tracker.record_train_loss(0, [worker])
+
+    assert value is None
+    assert np.isnan(np.load(tmp_path / "train_loss.npy")[0, 0])
+    assert worker.train_loss_calls == 0
 
 
 class _EvaluationWorker:
