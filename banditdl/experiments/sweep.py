@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import get_context
@@ -33,6 +34,8 @@ from banditdl.utils.seed_averaging import run_seed_averaged, seed_result_dir
 
 _WORKER_DEVICE = "cpu"
 _MAX_ATTEMPTS = 2
+_PROGRESS_INTERVAL_SECONDS = 60
+_QUEUE_PREVIEW = 10
 
 
 def _copy_dict_config(cfg: DictConfig) -> DictConfig:
@@ -276,6 +279,7 @@ def _run_pending(  # noqa: C901 - scheduling and retry policy belong together
     )
     if not pending:
         return
+    print(f"[optuna] output={output_root}")
 
     context = get_context("spawn")
     device_queue = context.Queue()
@@ -284,6 +288,9 @@ def _run_pending(  # noqa: C901 - scheduling and retry policy belong together
 
     base_cfg = OmegaConf.to_container(cfg, resolve=False)
     failed: list[int] = []
+    completed_now = 0
+    started_at = time.monotonic()
+    last_progress_at = started_at
     with ProcessPoolExecutor(
         max_workers=workers,
         mp_context=context,
@@ -308,7 +315,15 @@ def _run_pending(  # noqa: C901 - scheduling and retry policy belong together
                 ),
             }
             active[executor.submit(_run_configuration, task)] = task
+            if len(active) <= _QUEUE_PREVIEW:
+                print(
+                    f"[optuna] queued config={config_id:04d} "
+                    f"attempt={attempt}/{_MAX_ATTEMPTS} params={combos[config_id]}"
+                )
+        if len(active) > _QUEUE_PREVIEW:
+            print(f"[optuna] queued preview: showing {_QUEUE_PREVIEW}/{len(active)} configs")
 
+        print(f"[optuna] submitted={len(active)} running<=workers={workers}")
         for future in as_completed(active):
             task = active[future]
             try:
@@ -326,20 +341,50 @@ def _run_pending(  # noqa: C901 - scheduling and retry policy belong together
                     "error": traceback.format_exc(),
                 }
             _record_result(study, result, distributions, output_root)
+            completed_now += 1
             if result["ok"]:
+                elapsed = time.monotonic() - started_at
                 print(
                     f"[optuna] config={result['config_id']:04d} "
-                    f"value={result['value']:.6f} device={result['device']}"
+                    f"done={completed_now}/{len(pending)} "
+                    f"value={result['value']:.6f} device={result['device']} "
+                    f"elapsed={elapsed / 60:.1f}m"
                 )
             elif task["attempt"] < _MAX_ATTEMPTS:
+                print(
+                    f"[optuna] config={result['config_id']:04d} "
+                    f"attempt={task['attempt']}/{_MAX_ATTEMPTS} failed; retrying"
+                )
                 retry = dict(task)
                 retry["attempt"] = task["attempt"] + 1
                 retry_result = executor.submit(_run_configuration, retry).result()
                 _record_result(study, retry_result, distributions, output_root)
                 if not retry_result["ok"]:
                     failed.append(result["config_id"])
+                    print(
+                        f"[optuna] config={result['config_id']:04d} "
+                        f"failed after retry; see {retry_result['result_dir']}"
+                    )
+                else:
+                    print(
+                        f"[optuna] config={retry_result['config_id']:04d} "
+                        f"retry ok value={retry_result['value']:.6f} "
+                        f"device={retry_result['device']}"
+                    )
             else:
                 failed.append(result["config_id"])
+                print(
+                    f"[optuna] config={result['config_id']:04d} failed; see {result['result_dir']}"
+                )
+
+            now = time.monotonic()
+            if now - last_progress_at >= _PROGRESS_INTERVAL_SECONDS:
+                remaining = len(pending) - completed_now
+                print(
+                    f"[optuna] progress done={completed_now}/{len(pending)} "
+                    f"remaining={remaining} elapsed={(now - started_at) / 60:.1f}m"
+                )
+                last_progress_at = now
 
     if failed:
         failed_text = ", ".join(f"{config_id:04d}" for config_id in sorted(failed))
