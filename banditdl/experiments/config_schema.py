@@ -60,6 +60,12 @@ class EvaluationConfig:
 
 
 @dataclass
+class RuntimeConfig:
+    local_training: str = "sequential"
+    clients_per_batch: int | str = "auto"
+
+
+@dataclass
 class HeterogeneityConfig:
     _target_: str = "banditdl.data.partitioning.SyntheticPartitionStrategy"
     method: str = "dirichlet"
@@ -79,6 +85,7 @@ class BanditDLConfig:
     aggregator: AggregatorConfig = field(default_factory=AggregatorConfig)
     topology: TopologyConfig = field(default_factory=TopologyConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     heterogeneity: HeterogeneityConfig = field(default_factory=HeterogeneityConfig)
 
     seed: int = 42

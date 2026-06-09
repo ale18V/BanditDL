@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import pathlib
 import random
-import json
 from dataclasses import replace
 
 import numpy as np
@@ -12,6 +12,10 @@ import numpy.lib.format
 import torch
 from hydra.utils import instantiate
 
+from banditdl.core.local_training import (
+    BatchedEvaluator,
+    BatchedLocalTrainer,
+)
 from banditdl.core.sampling import (
     SamplerContext,
     UpdateCosineSimilarityReward,
@@ -89,9 +93,17 @@ def _raise_if_nonfinite_weights(honest_workers, current_step: int) -> None:
 class ResultTracker:
     """Consolidates metrics tracking, evaluation, and saving results."""
 
-    def __init__(self, cfg: BanditDLConfig, result_dir: pathlib.Path, test_loader=None, test_loader_sub=None):
+    def __init__(
+        self,
+        cfg: BanditDLConfig,
+        result_dir: pathlib.Path,
+        test_loader=None,
+        test_loader_sub=None,
+        batched_evaluator: BatchedEvaluator | None = None,
+    ):
         self.cfg, self.result_dir, self.test_loader, self.test_loader_sub = cfg, result_dir, test_loader, test_loader_sub
         self.result_dir.mkdir(parents=True, exist_ok=True)
+        self.batched_evaluator = batched_evaluator
         self.validation_steps = []
 
         # Progressive saving for all metrics
@@ -168,9 +180,14 @@ class ResultTracker:
 
             # Periodic Global Generalization (Subsampled)
             if self.test_loader_sub:
-                global_metrics = [
-                    w.compute_metrics_on_loader(self.test_loader_sub) for w in honest_workers
-                ]
+                if self.batched_evaluator and self.batched_evaluator.can_evaluate(honest_workers):
+                    global_metrics = self.batched_evaluator.evaluate_workers(
+                        honest_workers, self.test_loader_sub
+                    )
+                else:
+                    global_metrics = [
+                        w.compute_metrics_on_loader(self.test_loader_sub) for w in honest_workers
+                    ]
                 g_accs = [accuracy for accuracy, _ in global_metrics]
                 g_losses = [loss for _, loss in global_metrics]
                 self.mmaps["global_accuracy.npy"][eval_idx] = np.array(g_accs, dtype="float32")
@@ -273,7 +290,12 @@ class ResultTracker:
             logger.info(f"Final Worst Local Client Accuracy: {last_accs[worst_idx]:.4f}")
 
         if self.cfg.evaluation.evaluate_test and self.test_loader:
-            accs = [w.compute_accuracy_on_loader(self.test_loader) for w in honest_workers]
+            if self.batched_evaluator and self.batched_evaluator.can_evaluate(honest_workers):
+                metrics = self.batched_evaluator.evaluate_workers(honest_workers, self.test_loader)
+                accs = [accuracy for accuracy, _ in metrics]
+            else:
+                metrics = [w.compute_metrics_on_loader(self.test_loader) for w in honest_workers]
+                accs = [accuracy for accuracy, _ in metrics]
             global_acc_arr = np.array(accs, dtype="float32")
             np.save(self.result_dir / "test_accuracy.npy", global_acc_arr)
             logger.info(f"Final Mean Global Accuracy: {np.mean(global_acc_arr):.4f}")
@@ -483,6 +505,21 @@ def run_experiment(
     )
 
     honest_workers = _init_workers(cfg, data.train, data.local_test, device)
+    batched_trainer = None
+    batched_evaluator = None
+    if cfg.runtime.local_training == "batched":
+        candidate_trainer = BatchedLocalTrainer(cfg.runtime.clients_per_batch)
+        if candidate_trainer.can_train(honest_workers):
+            batched_trainer = candidate_trainer
+            batched_evaluator = BatchedEvaluator(cfg.runtime.clients_per_batch)
+        else:
+            logger.warning(
+                "batched local training disabled for model=%s because it has stateful training layers",
+                cfg.dataset.model,
+            )
+    elif cfg.runtime.local_training != "sequential":
+        raise ValueError("runtime.local_training must be 'sequential' or 'batched'")
+
     first_param = next(honest_workers[0].model.parameters())
     logger.info(
         "runtime device: requested=%s, model=%s, cuda_available=%s, cuda_device=%s",
@@ -491,6 +528,11 @@ def run_experiment(
         torch.cuda.is_available(),
         torch.cuda.current_device() if torch.cuda.is_available() else None,
     )
+    logger.info(
+        "runtime execution: local_training=%s, clients_per_batch=%s",
+        "batched" if batched_trainer else "sequential",
+        cfg.runtime.clients_per_batch,
+    )
     bw_cfg = _build_worker_config(cfg, device)
     byz_workers = [
         ByzantineWorker(i, honest_workers[0].model_size, bw_cfg)
@@ -498,7 +540,13 @@ def run_experiment(
     ]
     byz_by_id = {byz.worker_id: byz for byz in byz_workers}
 
-    with ResultTracker(cfg, result_dir, data.global_test, data.tracking_test) as tracker:
+    with ResultTracker(
+        cfg,
+        result_dir,
+        data.global_test,
+        data.tracking_test,
+        batched_evaluator=batched_evaluator,
+    ) as tracker:
         tracker.save_audit(
             {
                 **data.audit,
@@ -519,8 +567,11 @@ def run_experiment(
             tracker.record_train_loss(step, honest_workers)
             if step < cfg.effective_rounds:
                 prev_weights = [w.pull(None).detach().clone() for w in honest_workers]
-                for w in honest_workers:
-                    w.train()
+                if batched_trainer:
+                    batched_trainer.train_workers(honest_workers)
+                else:
+                    for w in honest_workers:
+                        w.train()
                 tracker.record_gradient_norms(step, honest_workers)
                 h_weights = [w.pull(None) for w in honest_workers]
                 h_deltas = [current - previous for current, previous in zip(h_weights, prev_weights, strict=True)]

@@ -91,6 +91,9 @@ class HonestWorker(BaseWorker):
             self.iterators[mode] = iter(self.loaders[mode])
             return next(self.iterators[mode])
 
+    def next_train_batch(self):
+        return self.sample_batch("train")
+
     def backward_pass(self, inputs, targets, *, record_loss=True):
         self.model.zero_grad()
         loss = self.loss(self.model(inputs), targets)
@@ -101,7 +104,7 @@ class HonestWorker(BaseWorker):
 
     def compute_gradients(self):
         self.model.train()
-        inputs, targets = self.sample_batch("train")
+        inputs, targets = self.next_train_batch()
         inputs, targets = inputs.to(self.device), targets.to(self.device)
 
         if self.labelflipping:

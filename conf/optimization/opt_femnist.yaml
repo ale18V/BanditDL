@@ -1,7 +1,7 @@
-batch_size: 25
+batch_size: 128
 loss: NLLLoss
 learning_rate: 0.05
 weight_decay: 1e-4
 momentum_worker: 0.9
-rounds: 500
+rounds: 1000
 nb_local_steps: 1
