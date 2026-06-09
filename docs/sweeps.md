@@ -144,7 +144,7 @@ Current shape:
 ```yaml
 plot:
   enabled: true
-  directions: [avg, worse]
+  directions: [final, avg, worse]
 
   heatmaps:
     - x: heterogeneity.alpha
@@ -173,6 +173,8 @@ How a metric is reduced over saved timesteps and nodes.
 
 - `avg`: arithmetic mean
 - `worse`: worst value
+- `best`: best value
+- `final`: mean over the last 2% of saved timesteps, with a minimum one timestep
 
 `worse` uses max for losses/regret/drift and min for accuracies/rewards.
 

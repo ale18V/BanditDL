@@ -387,7 +387,7 @@ def scalar_reduce_seed_outer(metric: MetricKey | str, values: np.ndarray, direct
             Metric values with seed as axis 0 and all inner axes belonging to a
             single run.
         direction: str
-            Reduction direction, either `avg`, `worse`, or `best`.
+            Reduction direction, either `avg`, `worse`, `best`, or `final`.
         return: float
             Mean across seeds of the per-seed scalar reduction.
     """
@@ -396,6 +396,14 @@ def scalar_reduce_seed_outer(metric: MetricKey | str, values: np.ndarray, direct
     if values.ndim == 0:
         values = values.reshape(1)
     inner_axes = tuple(range(1, values.ndim))
+    if direction == "final":
+        if values.ndim >= 2:
+            time_len = values.shape[1]
+            window = max(1, int(np.ceil(time_len * 0.02)))
+            values = values[:, -window:, ...]
+            inner_axes = tuple(range(1, values.ndim))
+        per_seed = values if not inner_axes else np.nanmean(values, axis=inner_axes)
+        return float(np.nanmean(per_seed))
     if direction == "avg":
         per_seed = values if not inner_axes else np.nanmean(values, axis=inner_axes)
         return float(np.nanmean(per_seed))

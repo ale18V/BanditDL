@@ -35,7 +35,7 @@ DEFAULT_PLOT_METRICS: tuple[str, ...] = (
     "sampler_max_weight",
 )
 
-DEFAULT_DIRECTIONS: tuple[str, ...] = ("avg", "worse", "best")
+DEFAULT_DIRECTIONS: tuple[str, ...] = ("final", "avg", "worse")
 DEFAULT_PLOT_MODES: tuple[str, ...] = ("per_parameter", "heatmap")
 STUDY_NAME = "sweep"
 OPTUNA_DB_NAME = "optuna.db"
@@ -47,6 +47,7 @@ _DIRECTION_ALIASES = {
     "worse": "worse",
     "worst": "worse",
     "best": "best",
+    "final": "final",
 }
 
 
@@ -54,7 +55,8 @@ def normalize_direction(value):
     token = str(value).lower().strip()
     if token not in _DIRECTION_ALIASES:
         raise ValueError(
-            f"Unsupported direction '{value}'. Allowed: avg, mean, average, worse, worst, best."
+            f"Unsupported direction '{value}'. "
+            "Allowed: avg, mean, average, worse, worst, best, final."
         )
     return _DIRECTION_ALIASES[token]
 
@@ -84,7 +86,9 @@ def normalize_plot_modes(value):
     for item in raw:
         mode = str(item).lower().strip()
         if mode not in valid:
-            raise ValueError(f"Unsupported plot_mode '{item}'. Allowed: {', '.join(sorted(valid))}.")
+            raise ValueError(
+                f"Unsupported plot_mode '{item}'. Allowed: {', '.join(sorted(valid))}."
+            )
         if mode not in modes:
             modes.append(mode)
     return modes or list(DEFAULT_PLOT_MODES)
@@ -240,7 +244,9 @@ def build_axis_metadata(search_space):
 def _axis_values_from_rows(axis: SweepAxis, rows: list[SweepRow]) -> SweepAxis:
     if axis.values:
         return axis
-    values = sorted({row.params[axis.path] for row in rows if axis.path in row.params}, key=_sort_key)
+    values = sorted(
+        {row.params[axis.path] for row in rows if axis.path in row.params}, key=_sort_key
+    )
     return SweepAxis(
         path=axis.path,
         display_name=axis.display_name,
@@ -278,7 +284,9 @@ def trial_result_dir(trials_root: Path, trial, trial_params, axis_meta) -> Path:
     return trials_root / folder / "results"
 
 
-def sweep_table_from_study(trials_root, study, search_space, metric_names, directions) -> ExperimentTable:
+def sweep_table_from_study(
+    trials_root, study, search_space, metric_names, directions
+) -> ExperimentTable:
     axes, axis_meta = build_axis_metadata(search_space)
     rows = []
     for trial in study.trials:
@@ -296,7 +304,9 @@ def sweep_table_from_study(trials_root, study, search_space, metric_names, direc
                 print(f"[plot_sweep] WARNING: skip metric '{metric}' for trial {result_dir}: {exc}")
                 continue
             for direction in directions:
-                metrics_flat[column_key_for(metric, direction)] = scalar_for_direction(metric, raw, direction)
+                metrics_flat[column_key_for(metric, direction)] = scalar_for_direction(
+                    metric, raw, direction
+                )
         rows.append(SweepRow(params=trial_params, metrics=metrics_flat))
     table = ExperimentTable(rows)
     table.axes_meta = [_axis_values_from_rows(axis, rows) for axis in axes]
@@ -365,6 +375,7 @@ def plot_sweep(plot_cfg, trials_root, study, search_space, output_dir):
     table = sweep_table_from_study(trials_root, study, search_space, all_metrics, directions)
 
     from banditdl.utils.sweep_plotting import SweepPlotter
+
     plotter = SweepPlotter(table, output_dir)
 
     for direction in directions:
@@ -379,9 +390,4 @@ def plot_sweep(plot_cfg, trials_root, study, search_space, output_dir):
         heatmap_specs = list(plot_cfg.get("heatmaps") or [])
         for spec in heatmap_specs:
             metrics = metrics_for_plot(plot_cfg, spec.get("exclude_metrics"))
-            x_path = spec.get("x")
-            y_path = spec.get("y")
-            fixed = spec.get("fixed") or {}
-            if x_path and y_path:
-                for metric in metrics:
-                    plotter.plot_heatmap(metric, direction, x_path, y_path, fixed)
+            plotter.plot_heatmap_spec(spec, metrics, direction)

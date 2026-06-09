@@ -10,6 +10,7 @@ hydra:
 plot:
   enabled: true
   directions:
+    - final
     - mean
     - worst
 
