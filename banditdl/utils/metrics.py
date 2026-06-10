@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
+import warnings
 
 import numpy as np
 
@@ -107,10 +108,16 @@ def _node_axis(values: np.ndarray) -> int:
 def _seed_outer_node_reduce(values: np.ndarray, reducer: Callable) -> np.ndarray:
     if values.ndim < 2:
         return values
-    per_seed_or_curve = reducer(values, axis=_node_axis(values))
+    per_seed_or_curve = _quiet_nan_reduce(reducer, values, axis=_node_axis(values))
     if _has_seed_axis(values):
-        return np.nanmean(per_seed_or_curve, axis=0)
+        return _quiet_nan_reduce(np.nanmean, per_seed_or_curve, axis=0)
     return per_seed_or_curve
+
+
+def _quiet_nan_reduce(reducer: Callable, values: np.ndarray, axis: int):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        return reducer(values, axis=axis)
 
 
 mean = Aggregation("average", lambda values: _seed_outer_node_reduce(values, np.nanmean))

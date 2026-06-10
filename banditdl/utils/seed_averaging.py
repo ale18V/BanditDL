@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 
@@ -142,7 +143,13 @@ def _aggregate_numpy_metrics(result_dir: Path, seed_dirs: list[Path]) -> None:
             elif aggregate_path.exists():
                 aggregate_path.unlink()
             continue
-        np.save(aggregate_path, np.nanmean(stacked.astype(float), axis=0))
+        np.save(aggregate_path, _nanmean(stacked.astype(float), axis=0))
+
+
+def _nanmean(values: np.ndarray, axis: int) -> np.ndarray:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        return np.nanmean(values, axis=axis)
 
 
 def _aggregate_jsonl_metrics(result_dir: Path, seeds: list[int], seed_dirs: list[Path]) -> None:

@@ -344,9 +344,12 @@ def neighbor_disagreement(
         return torch.zeros(stacked.shape[0], device=device)
 
     safe_neighbors = neighbors.clamp(min=0).long()
-    neighbor_weights = stacked[safe_neighbors]
-    diffs = neighbor_weights - stacked.unsqueeze(1)
-    dist_sq = (diffs * diffs).sum(dim=2)
-    dist_sq = dist_sq * valid_mask
-    counts = valid_mask.sum(dim=1).clamp(min=1).to(dist_sq.dtype)
-    return dist_sq.sum(dim=1) / counts
+    out = torch.zeros(stacked.shape[0], device=device, dtype=stacked.dtype)
+    for worker_id in range(stacked.shape[0]):
+        valid = valid_mask[worker_id]
+        if not bool(valid.any()):
+            continue
+        selected = safe_neighbors[worker_id, valid]
+        diffs = stacked[selected] - stacked[worker_id]
+        out[worker_id] = (diffs * diffs).sum() / selected.numel()
+    return out
