@@ -58,12 +58,15 @@ class SyntheticPartitionStrategy:
 
 
 class NaturalOwnerPartitionStrategy:
-    def __init__(self, writers_limit: int | None = None):
+    def __init__(self, writers_limit: int | None = None, writers_per_node: int = 1):
         self.writers_limit = writers_limit
+        self.writers_per_node = writers_per_node
 
     def partition(self, pool, nodes, global_test_ratio, rng) -> PartitionResult:
         if pool.owners is None:
             raise ValueError("natural-owner partitioning requires sample owner metadata")
+        if self.writers_per_node < 1:
+            raise ValueError("writers_per_node must be >= 1")
 
         owners = np.asarray(pool.owners).astype(str)
         owner_ids = np.unique(owners)
@@ -77,14 +80,18 @@ class NaturalOwnerPartitionStrategy:
         available = owner_ids[~np.isin(owner_ids, held_out)]
         if self.writers_limit is not None:
             available = available[: self.writers_limit]
-        if nodes > len(available):
+        required = nodes * self.writers_per_node
+        if required > len(available):
             raise ValueError(
-                f"requested {nodes} nodes but only {len(available)} sample owners are available"
+                f"requested {nodes} nodes with {self.writers_per_node} writers each "
+                f"but only {len(available)} sample owners are available"
             )
 
-        selected = available[rng.choice(len(available), size=nodes, replace=False)]
+        selected = available[rng.choice(len(available), size=required, replace=False)]
+        owners_by_node = np.array_split(selected, nodes)
         assignments = {
-            node: np.flatnonzero(owners == owner).tolist() for node, owner in enumerate(selected)
+            node: np.flatnonzero(np.isin(owners, node_owners)).tolist()
+            for node, node_owners in enumerate(owners_by_node)
         }
         global_indices = np.flatnonzero(np.isin(owners, held_out)).tolist()
         return PartitionResult(
@@ -93,8 +100,13 @@ class NaturalOwnerPartitionStrategy:
             {
                 "strategy": "natural_owner",
                 "selected_owners": selected.tolist(),
+                "owners_by_node": {
+                    int(node): node_owners.tolist()
+                    for node, node_owners in enumerate(owners_by_node)
+                },
                 "held_out_owners": held_out.tolist(),
                 "writers_limit": self.writers_limit,
+                "writers_per_node": self.writers_per_node,
             },
         )
 

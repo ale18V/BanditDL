@@ -62,6 +62,23 @@ def test_natural_partition_assigns_one_writer_per_node(synthetic_femnist):
     assert len(result.global_test_indices) == 18
 
 
+def test_natural_partition_can_assign_multiple_writers_per_node(synthetic_femnist):
+    pool = FemnistProvider().load()
+    result = NaturalOwnerPartitionStrategy(writers_per_node=2).partition(
+        pool,
+        nodes=3,
+        global_test_ratio=0.2,
+        rng=np.random.default_rng(4),
+    )
+
+    assert set(result.node_indices) == {0, 1, 2}
+    for node, indices in result.node_indices.items():
+        assert len(set(pool.owners[indices])) == 2
+        assert len(indices) == 18
+        assert len(result.audit["owners_by_node"][node]) == 2
+    assert result.audit["writers_per_node"] == 2
+
+
 def test_natural_partition_rejects_too_many_nodes(synthetic_femnist):
     pool = FemnistProvider().load()
 

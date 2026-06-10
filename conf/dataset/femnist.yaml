@@ -6,3 +6,4 @@ provider:
 partitioner:
   _target_: banditdl.data.partitioning.NaturalOwnerPartitionStrategy
   writers_limit: null
+  writers_per_node: 1
