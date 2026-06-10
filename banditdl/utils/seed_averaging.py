@@ -12,12 +12,14 @@ those directories into the public trial result directory and keeps stacked
 from __future__ import annotations
 
 import json
+import gc
 import shutil
 import warnings
 from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
+import torch
 
 from banditdl.experiments.config_schema import BanditDLConfig
 
@@ -73,9 +75,19 @@ def run_seed_averaged(
     seeds = [base_seed + offset for offset in range(num_seeds)]
     for seed in seeds:
         per_seed_dir = seed_result_dir(result_dir, seed)
-        run_once(config, per_seed_dir, seed, device)
+        try:
+            run_once(config, per_seed_dir, seed, device)
+        finally:
+            _cleanup_after_seed(device)
     aggregate_seed_results(result_dir, seeds)
     return seeds
+
+
+def _cleanup_after_seed(device: str) -> None:
+    gc.collect()
+    if str(device).startswith("cuda") and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
 
 
 def aggregate_seed_results(result_dir: Path, seeds: list[int]) -> None:
