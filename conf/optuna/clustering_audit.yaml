@@ -1,0 +1,43 @@
+name: clustering-audit
+direction: maximize
+workers: 1
+
+plot:
+  heatmaps:
+    - x: heterogeneity.clusters
+      y: topology.sampling
+      group_by:
+        - sampler.name
+      aggregate_by: avg
+      render: [heatmap]
+      exclude_metrics: []
+
+search_space:
+  heterogeneity.method:
+    name: partition
+    type: categorical
+    choices: [pathological]
+  heterogeneity.alpha:
+    name: alpha
+    type: categorical
+    choices: [null]
+  heterogeneity.clusters:
+    name: clusters
+    type: categorical
+    choices: [2, 5]
+  heterogeneity.classes_per_group:
+    name: classes
+    type: categorical
+    choices: [2]
+  heterogeneity.group_overlap:
+    name: overlap
+    type: categorical
+    choices: [0]
+  topology.sampling:
+    name: sampling
+    type: categorical
+    choices: [0.2]
+  sampler.name:
+    name: sampler
+    type: categorical
+    choices: [uniform]

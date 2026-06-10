@@ -107,10 +107,29 @@ def _choices_from_spec(inner_spec):
         return list(inner_spec)
     if not isinstance(inner_spec, dict):
         return []
-    if str(inner_spec.get("type", "")).lower() != "categorical":
+    spec_type = str(inner_spec.get("type", "")).lower()
+    if spec_type == "tuple":
+        return [_tuple_choice_label(choice) for choice in inner_spec.get("choices", [])]
+    if spec_type != "categorical":
         return []
     choices = inner_spec.get("choices")
     return list(choices) if isinstance(choices, list) else []
+
+
+def _is_tuple_spec(inner_spec) -> bool:
+    return isinstance(inner_spec, dict) and str(inner_spec.get("type", "")).lower() == "tuple"
+
+
+def _tuple_choice_label(choice) -> str:
+    if not isinstance(choice, dict) or "label" not in choice:
+        raise ValueError("tuple choices must be mappings with 'label' and 'params'")
+    return str(choice["label"])
+
+
+def _tuple_choice_params(choice) -> dict:
+    if not isinstance(choice, dict) or not isinstance(choice.get("params"), dict):
+        raise ValueError("tuple choices must define a params mapping")
+    return dict(choice["params"])
 
 
 def _when_clause(spec):
@@ -164,6 +183,13 @@ def enumerate_valid_param_dicts(base_cfg, search_space):
             OmegaConf.update(trial_cfg, key, value, merge=False)
         if when_clause is not None and not _conditions_met(trial_cfg, when_clause):
             walk(acc_params, idx + 1)
+            return
+        if _is_tuple_spec(inner_spec):
+            for choice in inner_spec.get("choices", []):
+                next_params = dict(acc_params)
+                next_params[path] = _tuple_choice_label(choice)
+                next_params.update(_tuple_choice_params(choice))
+                walk(next_params, idx + 1)
             return
         choices = _choices_from_spec(inner_spec)
         if not choices:

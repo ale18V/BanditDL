@@ -22,8 +22,11 @@ from banditdl.experiments.engine import run_experiment
 from banditdl.utils.plot_sweep_base import (
     STUDY_NAME,
     _choices_from_spec,
+    _is_tuple_spec,
     _normalize_search_space,
     _strip_meta,
+    _tuple_choice_label,
+    _tuple_choice_params,
     build_axis_metadata,
     enumerate_valid_param_dicts,
     optuna_storage_url,
@@ -47,6 +50,8 @@ def _copy_dict_config(cfg: DictConfig) -> DictConfig:
 
 def _apply_trial_params(trial_cfg: DictConfig, trial_params: dict) -> None:
     for path, value in trial_params.items():
+        if str(path).startswith("sweep."):
+            continue
         OmegaConf.update(trial_cfg, path, value, merge=False, force_add=True)
 
 
@@ -177,6 +182,21 @@ def _categorical_distributions(search_space: dict) -> dict:
     ordered_paths, _, _ = _normalize_search_space(search_space)
     for path in ordered_paths:
         spec, _ = _strip_meta(search_space[path])
+        if _is_tuple_spec(spec):
+            choices = list(spec.get("choices", []))
+            labels = [_tuple_choice_label(choice) for choice in choices]
+            if not labels:
+                raise ValueError(f"Optuna tuple sweep '{path}' must define choices")
+            distributions[path] = CategoricalDistribution(labels)
+            expanded: dict[str, set] = {}
+            for choice in choices:
+                for key, value in _tuple_choice_params(choice).items():
+                    expanded.setdefault(str(key), set()).add(value)
+            for key, values in expanded.items():
+                distributions[key] = CategoricalDistribution(
+                    sorted(values, key=lambda value: (isinstance(value, str), str(value)))
+                )
+            continue
         choices = _choices_from_spec(spec)
         if not choices:
             raise ValueError(

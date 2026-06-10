@@ -22,17 +22,17 @@ search_space:
   topology.sampling:
     name: sampling
     type: categorical
-    choices: [0.2]
+    choices: [0.1, 0.2, 0.3]
   sampler.name:
     name: sampler
     type: categorical
-    choices: [uniform, cucb, cts, discounted_cucb, discounted_cts]
+    choices: [uniform, epsilon_greedy, cucb, cts, discounted_cucb, discounted_cts]
   sampler.reward:
     name: reward
     type: categorical
     choices: [parameter_distance, cosine_similarity]
     when:
-      sampler.name: [cucb, cts, discounted_cucb, discounted_cts]
+      sampler.name: [epsilon_greedy, cucb, cts, discounted_cucb, discounted_cts]
   sampler.params.exploration:
     name: exploration
     type: categorical

@@ -1,43 +1,35 @@
-name: femnist-pre-sweep
+name: femnist-discount
 direction: maximize
 workers: 8
 
 plot:
   heatmaps:
-    - x: heterogeneity.alpha
+    - x: sampler.params.discount
       y: topology.sampling
       group_by:
-        - sampler.name
         - sampler.reward
       aggregate_by: avg
       render: [heatmap]
       exclude_metrics: []
 
-# Small exhaustive example. Expand the categorical choices for production.
 search_space:
-  topology.sampling:
-    name: sampling
-    type: categorical
-    choices: [0.1, 0.2, 0.4]
   sampler.name:
     name: sampler
     type: categorical
-    choices: [uniform, cucb, discounted_cucb]
+    choices: [discounted_cucb]
   sampler.reward:
     name: reward
     type: categorical
     choices: [parameter_distance, update_cosine_similarity]
-    when:
-      sampler.name: [cucb, cucb, discounted_cucb]
   sampler.params.exploration:
     name: exploration
     type: categorical
     choices: [1.0]
-    when:
-      sampler.name: [cucb, discounted_cucb]
   sampler.params.discount:
     name: discount
     type: categorical
-    choices: [0.99, 0.95, 0.9]
-    when:
-      sampler.name: [discounted_cucb]
+    choices: [0.9, 0.95, 0.98, 0.99, 0.995]
+  topology.sampling:
+    name: sampling
+    type: categorical
+    choices: [0.1, 0.2, 0.4]
