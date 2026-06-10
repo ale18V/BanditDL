@@ -79,6 +79,9 @@ class BatchedLocalTrainer:
             last_norms = _grad_norms(step_grad)
             lr = _learning_rate_for_step(workers[0], workers[0]._current_step)
             params = _sgd_step(params, step_grad, lr, workers[0].config.weight_decay)
+            
+            # Aggressive cleanup of local-step temporaries
+            del x, y, mask, grads, step_grad
 
         _write_back(workers, params, momentum, last_losses, last_norms)
 

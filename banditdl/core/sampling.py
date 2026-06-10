@@ -54,7 +54,7 @@ class CosineSimilarityReward(RewardStrategy):
         similarities = F.cosine_similarity(neighbors, local, dim=1, eps=1e-12)
         zero_norm = (neighbors.norm(dim=1) == 0) | (local_weights.norm() == 0)
         similarities = torch.where(zero_norm, 0.0, similarities)
-        return ((similarities + 1) / 2).clamp(0, 1).tolist()
+        return ((similarities + 1) / 2).clamp(0, 1).detach().cpu().tolist()
 
 
 class UpdateCosineSimilarityReward(CosineSimilarityReward):

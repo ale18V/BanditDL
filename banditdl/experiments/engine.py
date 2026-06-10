@@ -590,6 +590,7 @@ def run_experiment(
                 tracker.record_gradient_norms(step, honest_workers)
                 h_weights = [w.pull(None) for w in honest_workers]
                 h_deltas = [current - previous for current, previous in zip(h_weights, prev_weights, strict=True)]
+                del prev_weights
 
                 # Inform Byzantines once per round
                 for byz in byz_workers:
@@ -606,7 +607,16 @@ def run_experiment(
                     cum_alg_r,
                     tracker,
                 )
+                del h_weights, h_deltas
+                
                 _raise_if_nonfinite_weights(honest_workers, step)
                 if step % 10 == 0:
                     tracker.save_snapshot()
+                    
+                # Prevent memory fragmentation/growth
+                if step % 50 == 0:
+                    import gc
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
         tracker.finalize(honest_workers)
