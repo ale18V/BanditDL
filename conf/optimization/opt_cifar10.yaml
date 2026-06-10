@@ -3,4 +3,4 @@ loss: CrossEntropyLoss
 learning_rate: 1e-2
 rounds: 2000
 momentum_worker: 0.99
-nb_local_steps: 1
+nb_local_steps: 3

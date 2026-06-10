@@ -4,8 +4,8 @@ from math import prod
 from typing import Iterable
 
 import torch
-from torch import nn
 import torch.nn.functional as F
+from torch import nn
 from torch.func import functional_call, grad, vmap
 
 
@@ -239,7 +239,18 @@ class BatchedEvaluator:
         group_size = self._group_size(len(workers))
         out = []
         for group in chunks(workers, group_size):
-            out.extend(self._evaluate_group(group, loader))
+            out.extend(self._evaluate_group_shared_loader(group, loader))
+        return out
+
+    @torch.no_grad()
+    def evaluate_worker_loaders(self, workers: list, loader_fn) -> list[tuple[float, float]]:
+        if not workers:
+            return []
+        group_size = self._group_size(len(workers))
+        out = []
+        for group in chunks(workers, group_size):
+            loaders = [loader_fn(worker) for worker in group]
+            out.extend(self._evaluate_group_worker_loaders(group, loaders))
         return out
 
     def _group_size(self, workers: int) -> int:
@@ -248,37 +259,109 @@ class BatchedEvaluator:
         return max(1, min(workers, int(self.clients_per_batch)))
 
     @torch.no_grad()
-    def _evaluate_group(self, workers: list, loader) -> list[tuple[float, float]]:
-        reference = workers[0].model
-        reference.eval()
+    def _evaluate_group_shared_loader(self, workers: list, loader) -> list[tuple[float, float]]:
+        context = _EvaluationContext(workers)
+        for inputs, targets in loader:
+            x = inputs.to(context.device, non_blocking=True)
+            y = targets.to(context.device, non_blocking=True)
+            x = x.unsqueeze(0).expand(len(workers), *x.shape)
+            y = y.unsqueeze(0).expand(len(workers), *y.shape)
+            mask = torch.ones((len(workers), y.shape[1]), device=context.device)
+            context.update(x, y, mask)
+        return context.results()
+
+    @torch.no_grad()
+    def _evaluate_group_worker_loaders(self, workers: list, loaders: list) -> list[tuple[float, float]]:
+        context = _EvaluationContext(workers)
+        iterators = [iter(loader) for loader in loaders]
+        active = [True] * len(iterators)
+        while any(active):
+            xs, ys, masks = [], [], []
+            max_batch = 0
+            for i, iterator in enumerate(iterators):
+                if not active[i]:
+                    xs.append(None)
+                    ys.append(None)
+                    continue
+                try:
+                    x, y = next(iterator)
+                except StopIteration:
+                    active[i] = False
+                    xs.append(None)
+                    ys.append(None)
+                    continue
+                x = x.to(context.device, non_blocking=True)
+                y = y.to(context.device, non_blocking=True)
+                xs.append(x)
+                ys.append(y)
+                max_batch = max(max_batch, y.shape[0])
+            if max_batch == 0:
+                continue
+            for i, (x, y) in enumerate(zip(xs, ys, strict=True)):
+                if x is None or y is None:
+                    sample_x, sample_y = _empty_like_batch(xs, ys, max_batch, context.device)
+                    xs[i], ys[i] = sample_x, sample_y
+                    masks.append(torch.zeros(max_batch, device=context.device))
+                    continue
+                real_size = y.shape[0]
+                if real_size < max_batch:
+                    pad_indices = torch.arange(max_batch - real_size, device=context.device) % real_size
+                    x = torch.cat([x, x.index_select(0, pad_indices)], dim=0)
+                    y = torch.cat([y, y.index_select(0, pad_indices)], dim=0)
+                mask = torch.zeros(max_batch, device=context.device)
+                mask[:real_size] = 1.0
+                xs[i], ys[i] = x, y
+                masks.append(mask)
+            context.update(torch.stack(xs), torch.stack(ys), torch.stack(masks))
+        return context.results()
+
+
+class _EvaluationContext:
+    def __init__(self, workers: list):
+        self.workers = workers
+        self.reference = workers[0].model
+        self.reference.eval()
         for worker in workers:
             worker.model.eval()
-        loss_fn = workers[0].loss
-        device = workers[0].device
-        params, buffers = _stack_state_no_grad(workers, device)
+        self.loss_fn = workers[0].loss
+        self.device = workers[0].device
+        self.params, self.buffers = _stack_state_no_grad(workers, self.device)
+        self.total = torch.zeros(len(workers), device=self.device)
+        self.correct = torch.zeros(len(workers), device=self.device)
+        self.loss_total = torch.zeros(len(workers), device=self.device)
 
         def forward_one(one_params, one_buffers, x):
-            return functional_call(reference, (one_params, one_buffers), (x,))
+            return functional_call(self.reference, (one_params, one_buffers), (x,))
 
-        forward_fn = vmap(forward_one, in_dims=(0, 0, 0))
-        total = torch.zeros(len(workers), device=device)
-        correct = torch.zeros(len(workers), device=device)
-        loss_total = torch.zeros(len(workers), device=device)
-        for inputs, targets in loader:
-            inputs = inputs.to(device, non_blocking=True)
-            targets = targets.to(device, non_blocking=True)
-            x = inputs.unsqueeze(0).expand(len(workers), *inputs.shape)
-            y = targets.unsqueeze(0).expand(len(workers), *targets.shape)
-            outputs = forward_fn(params, buffers, x)
-            predictions = outputs.argmax(dim=2)
-            batch_losses = vmap(loss_fn)(outputs, y)
-            batch_size = targets.size(0)
-            total += batch_size
-            correct += (predictions == y).sum(dim=1)
-            loss_total += batch_losses * batch_size
-        acc = (correct / total).detach().cpu().tolist()
-        losses = (loss_total / total).detach().cpu().tolist()
-        return list(zip(acc, losses, strict=True))
+        self.forward_fn = vmap(forward_one, in_dims=(0, 0, 0))
+
+    def update(self, x: torch.Tensor, y: torch.Tensor, mask: torch.Tensor) -> None:
+        outputs = self.forward_fn(self.params, self.buffers, x)
+        predictions = outputs.argmax(dim=2)
+        batch_losses = vmap(lambda logits, targets: _per_sample_loss(self.loss_fn, logits, targets))(
+            outputs, y
+        )
+        self.total += mask.sum(dim=1)
+        self.correct += ((predictions == y) * mask.bool()).sum(dim=1)
+        self.loss_total += (batch_losses * mask).sum(dim=1)
+
+    def results(self) -> list[tuple[float, float]]:
+        acc = torch.where(self.total > 0, self.correct / self.total.clamp_min(1), torch.nan)
+        losses = torch.where(
+            self.total > 0,
+            self.loss_total / self.total.clamp_min(1),
+            torch.nan,
+        )
+        return list(zip(acc.detach().cpu().tolist(), losses.detach().cpu().tolist(), strict=True))
+
+
+def _empty_like_batch(xs: list, ys: list, batch_size: int, device: str):
+    sample_x = next(x for x in xs if x is not None)
+    sample_y = next(y for y in ys if y is not None)
+    return (
+        torch.zeros((batch_size, *sample_x.shape[1:]), dtype=sample_x.dtype, device=device),
+        torch.zeros((batch_size, *sample_y.shape[1:]), dtype=sample_y.dtype, device=device),
+    )
 
 
 def _stack_state_no_grad(workers: list, device: str):

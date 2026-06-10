@@ -62,3 +62,23 @@ def test_batched_shared_loader_evaluation_matches_worker_evaluation():
     for (got_acc, got_loss), (exp_acc, exp_loss) in zip(got, expected, strict=True):
         assert got_acc == exp_acc
         assert got_loss == pytest.approx(exp_loss)
+
+
+def test_batched_per_worker_loader_evaluation_matches_worker_evaluation():
+    torch.manual_seed(11)
+    workers = [_worker(0), _worker(1, offset=0.1)]
+    workers[0].loaders["validation"] = _loader(batch_size=3)
+    workers[1].loaders["validation"] = _loader(offset=0.1, batch_size=2)
+
+    expected = [
+        worker.compute_metrics_on_loader(worker.loaders["validation"])
+        for worker in workers
+    ]
+    got = BatchedEvaluator(clients_per_batch=2).evaluate_worker_loaders(
+        workers,
+        lambda worker: worker.loaders["validation"],
+    )
+
+    for (got_acc, got_loss), (exp_acc, exp_loss) in zip(got, expected, strict=True):
+        assert got_acc == exp_acc
+        assert got_loss == pytest.approx(exp_loss)

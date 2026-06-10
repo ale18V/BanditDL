@@ -16,8 +16,8 @@ device: cpu
 identical_initialization: false
 
 runtime:
-  local_training: sequential
-  clients_per_batch: auto
+  local_training: batched
+  clients_per_batch: 30
 
 hydra:
   run:

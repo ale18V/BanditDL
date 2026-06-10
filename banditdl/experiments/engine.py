@@ -123,7 +123,7 @@ class ResultTracker:
             "validation_loss.npy": (nb_evals, cfg.nb_honests),
             "global_accuracy.npy": (nb_evals, cfg.nb_honests),  # Periodic subsampled eval
             "global_loss.npy": (nb_evals, cfg.nb_honests),
-            "train_loss.npy": (cfg.effective_rounds + 1, cfg.nb_honests),
+            "train_loss.npy": (cfg.effective_rounds, cfg.nb_honests),
             "neighbor_disagreement.npy": (cfg.effective_rounds, cfg.nb_honests),
             "consensus_drift.npy": (cfg.effective_rounds, cfg.nb_honests),
             "gradient_norms.npy": (cfg.effective_rounds, cfg.nb_honests),
@@ -168,9 +168,15 @@ class ResultTracker:
         )
         if should_evaluate and step not in self.validation_steps:
             eval_idx = len(self.validation_steps)
-            validation_metrics = [
-                w.compute_metrics_on_loader(w.loaders["validation"]) for w in honest_workers
-            ]
+            if self.batched_evaluator and self.batched_evaluator.can_evaluate(honest_workers):
+                validation_metrics = self.batched_evaluator.evaluate_worker_loaders(
+                    honest_workers,
+                    lambda worker: worker.loaders["validation"],
+                )
+            else:
+                validation_metrics = [
+                    w.compute_metrics_on_loader(w.loaders["validation"]) for w in honest_workers
+                ]
             accs = [accuracy for accuracy, _ in validation_metrics]
             v_losses = [loss for _, loss in validation_metrics]
 
@@ -206,10 +212,10 @@ class ResultTracker:
         return mean_acc, mean_v
 
     def record_train_loss(self, step, honest_workers):
-        if step <= self.cfg.effective_rounds:
+        if step < self.cfg.effective_rounds:
             losses = [float(getattr(w, "last_train_loss", np.nan)) for w in honest_workers]
             self.mmaps["train_loss.npy"][step] = np.array(losses, dtype="float32")
-            if step % 10 == 0 or step == self.cfg.effective_rounds:
+            if step % 10 == 0 or step == self.cfg.effective_rounds - 1:
                 self.mmaps["train_loss.npy"].flush()
             finite_losses = [loss for loss in losses if np.isfinite(loss)]
             return float(np.mean(finite_losses)) if finite_losses else None
@@ -564,7 +570,6 @@ def run_experiment(
 
         for step in range(cfg.effective_rounds + 1):
             tracker.evaluate_step(step, honest_workers)
-            tracker.record_train_loss(step, honest_workers)
             if step < cfg.effective_rounds:
                 prev_weights = [w.pull(None).detach().clone() for w in honest_workers]
                 if batched_trainer:
@@ -572,6 +577,7 @@ def run_experiment(
                 else:
                     for w in honest_workers:
                         w.train()
+                tracker.record_train_loss(step, honest_workers)
                 tracker.record_gradient_norms(step, honest_workers)
                 h_weights = [w.pull(None) for w in honest_workers]
                 h_deltas = [current - previous for current, previous in zip(h_weights, prev_weights, strict=True)]

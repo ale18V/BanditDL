@@ -124,7 +124,7 @@ def test_tracker_records_validation_checkpoints_and_roundwise_train_loss(tmp_pat
     assert np.load(tmp_path / "global_loss.npy").shape == (4, 1)
     np.testing.assert_allclose(
         np.load(tmp_path / "train_loss.npy")[:, 0],
-        np.arange(0, 6, dtype=float),
+        np.arange(0, 5, dtype=float),
     )
     assert worker.train_loss_calls == 0
 
