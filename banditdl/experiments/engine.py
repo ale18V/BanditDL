@@ -75,6 +75,15 @@ def _log_progress(
     if train_loss is not None:
         message += f" | train_loss={train_loss:.4f}"
     logger.info(message)
+    if torch.cuda.is_available():
+        device = torch.cuda.current_device()
+        logger.info(
+            "cuda memory: device=%s allocated=%.2fGiB reserved=%.2fGiB peak_allocated=%.2fGiB",
+            device,
+            torch.cuda.memory_allocated(device) / (1024**3),
+            torch.cuda.memory_reserved(device) / (1024**3),
+            torch.cuda.max_memory_allocated(device) / (1024**3),
+        )
 
 
 def _log_done() -> None:

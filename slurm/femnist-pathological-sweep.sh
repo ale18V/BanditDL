@@ -32,6 +32,7 @@ export UV_PROJECT_ENVIRONMENT="${SCRATCH:-/ioscratch}/banditdl/venv"
 export UV_LINK_MODE=copy
 export HYDRA_FULL_ERROR=1
 export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 echo "job_id=${SLURM_JOB_ID:-none}"
 echo "node_list=${SLURM_JOB_NODELIST:-none}"
