@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import optuna
 from omegaconf import OmegaConf
 
@@ -289,29 +290,58 @@ def trial_result_dir(trials_root: Path, trial, trial_params, axis_meta) -> Path:
     return trials_root / folder / "results"
 
 
-def sweep_table_from_study(
-    trials_root, study, search_space, metric_names, directions
-) -> ExperimentTable:
-    axes, axis_meta = build_axis_metadata(search_space)
-    rows = []
+def _completed_trial_groups(study):
+    grouped_trials = {}
     for trial in study.trials:
         if trial.state != optuna.trial.TrialState.COMPLETE:
             continue
-        trial_params = trial_params_for_table(trial)
-        if not trial_params:
+        params = trial_params_for_table(trial)
+        if not params:
             continue
-        result_dir = trial_result_dir(Path(trials_root), trial, trial_params, axis_meta)
+        key = tuple(sorted(params.items()))
+        grouped_trials.setdefault(key, []).append(trial)
+    return grouped_trials
+
+
+def _reduce_trial_metric(trials_root, trials, params, axis_meta, metric, direction):
+    values = []
+    for trial in trials:
+        result_dir = trial_result_dir(Path(trials_root), trial, params, axis_meta)
+        try:
+            raw = MetricLoader(result_dir).load_seed_values(metric)
+        except (FileNotFoundError, ValueError, OSError) as exc:
+            print(f"[plot_sweep] WARNING: skip metric '{metric}' for trial {result_dir}: {exc}")
+            continue
+        values.append(scalar_for_direction(metric, raw, direction))
+    return float(np.nanmean(values)) if values else None
+
+
+def sweep_table_from_study(
+    trials_root, study, search_space, metric_names, directions, expected_seeds
+) -> ExperimentTable:
+    axes, axis_meta = build_axis_metadata(search_space)
+    rows = []
+    expected = set(expected_seeds)
+    for key, trials in _completed_trial_groups(study).items():
+        trial_params = dict(key)
+        completed_seeds = {
+            int(trial.user_attrs["seed"]) for trial in trials if "seed" in trial.user_attrs
+        }
+        has_legacy_aggregate = any("seed" not in trial.user_attrs for trial in trials)
+        missing = set() if has_legacy_aggregate else expected - completed_seeds
+        if missing:
+            print(
+                f"[plot_sweep] WARNING: incomplete seeds for {trial_params}: "
+                f"missing={sorted(missing)}"
+            )
         metrics_flat = {}
         for metric in metric_names:
-            try:
-                raw = MetricLoader(result_dir).load_seed_values(metric)
-            except (FileNotFoundError, ValueError, OSError) as exc:
-                print(f"[plot_sweep] WARNING: skip metric '{metric}' for trial {result_dir}: {exc}")
-                continue
             for direction in directions:
-                metrics_flat[metric_column(metric, direction)] = scalar_for_direction(
-                    metric, raw, direction
+                value = _reduce_trial_metric(
+                    trials_root, trials, trial_params, axis_meta, metric, direction
                 )
+                if value is not None:
+                    metrics_flat[metric_column(metric, direction)] = value
         rows.append(SweepRow(params=trial_params, metrics=metrics_flat))
     table = ExperimentTable(rows)
     table.axes_meta = [_axis_values_from_rows(axis, rows) for axis in axes]
@@ -363,17 +393,25 @@ def plot_sweep_from_cfg(output_root: Path, cfg, study=None, output_dir: Path | N
         trials_root=output_root / "trials",
         study=study,
         search_space=search_space,
+        expected_seeds=[int(seed) for seed in cfg.optuna.get("seeds", [])],
         output_dir=output_dir or output_root / "sweep_artifacts",
     )
 
 
-def plot_sweep(plot_cfg, trials_root, study, search_space, output_dir):
+def plot_sweep(plot_cfg, trials_root, study, search_space, expected_seeds, output_dir):
     directions = normalize_directions(plot_cfg.get("directions"))
     heatmap_specs = list(plot_cfg.get("heatmaps") or [])
     line_specs = list(plot_cfg.get("lines") or [])
     specs = [*heatmap_specs, *line_specs]
     all_metrics = list(dict.fromkeys(metric for spec in specs for metric in metrics_for_plot(spec)))
-    table = sweep_table_from_study(trials_root, study, search_space, all_metrics, directions)
+    table = sweep_table_from_study(
+        trials_root,
+        study,
+        search_space,
+        all_metrics,
+        directions,
+        expected_seeds,
+    )
 
     plotter = SweepPlotter(table, output_dir)
 

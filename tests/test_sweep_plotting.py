@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import optuna
+import pytest
 
 from banditdl.utils.experiment_table import ExperimentTable, SweepRow
 from banditdl.utils.metrics import scalar_reduce_seed_outer
@@ -12,6 +13,7 @@ from banditdl.utils.plot_sweep_base import (
     metrics_for_plot,
     normalize_direction,
     optuna_storage_url,
+    sweep_table_from_study,
 )
 from banditdl.utils.plotting_utils import axis_values, matches_axis, matches_split
 from banditdl.utils.sweep_plotting import SweepPlotter
@@ -218,3 +220,40 @@ def test_optuna_storage_url_is_loadable(tmp_path: Path):
 
     assert loaded.study_name == STUDY_NAME
     assert loaded.user_attrs["smoke"] is True
+
+
+def test_sweep_table_averages_independent_seed_trials(tmp_path: Path):
+    study = optuna.create_study(direction="maximize")
+    params = {"sampler.name": "cucb"}
+    for seed, value in ((10, 0.2), (11, 0.8)):
+        result_dir = tmp_path / f"seed-{seed}"
+        result_dir.mkdir()
+        np.save(result_dir / "validation_accuracy.npy", np.array([[value], [value]]))
+        study.add_trial(
+            optuna.trial.create_trial(
+                value=value,
+                params={"sampler.name": "cucb"},
+                distributions={
+                    "sampler.name": optuna.distributions.CategoricalDistribution(["cucb"])
+                },
+                user_attrs={
+                    "config_id": 0,
+                    "seed": seed,
+                    "attempt": 1,
+                    "resolved_params": params,
+                    "result_dir": str(result_dir),
+                },
+            )
+        )
+
+    table = sweep_table_from_study(
+        tmp_path,
+        study,
+        {"sampler.name": {"type": "categorical", "choices": ["cucb"]}},
+        ["validation_accuracy"],
+        ["final"],
+        [10, 11],
+    )
+
+    assert len(table.rows) == 1
+    assert table.rows[0].metrics["validation_accuracy__final"] == pytest.approx(0.5)
