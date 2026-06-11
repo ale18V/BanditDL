@@ -146,7 +146,6 @@ Useful subdirectories:
 
 ```text
 trials/                 # one directory per grid configuration
-best_trial_test_eval/   # final re-run of the best validation config
 sweep_artifacts/        # sweep-level plots and summaries
 ```
 

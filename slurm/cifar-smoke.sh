@@ -48,7 +48,7 @@ uv run python -m banditdl.experiments.sweep \
   optuna=customsweep \
   hydra.run.dir=${SCRATCH:-/ioscratch}/banditdl/optuna_runs/femnist-pre-sweep/2026-06-09_20-04-54_2509140/ \
   evaluation.evaluation_delta=25 \
-  num_seeds=3 \
+  'optuna.seeds=[123,124,125]' \
   identical_initialization=true \
   device=cuda \
   "$@"

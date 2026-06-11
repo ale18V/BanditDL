@@ -50,7 +50,7 @@ uv run python -m banditdl.experiments.sweep \
   topology.nodes=30 \
   optimization.rounds=1000 \
   evaluation.evaluation_delta=25 \
-  num_seeds=3 \
+  'optuna.seeds=[123,124,125]' \
   identical_initialization=true \
   runtime.local_training=batched \
   runtime.clients_per_batch=30 \

@@ -64,12 +64,11 @@ Workflow:
 1. read `optuna.search_space`
 2. enumerate every valid categorical combination
 3. respect `when:` guards for conditional parameters
-4. run one seed-averaged training job per trial
+4. expand every configuration across `optuna.seeds`
 5. run configurations concurrently and save isolated trial attempts
 6. persist the Optuna study to `<hydra_run>/optuna.db`
-7. pick the best trial from validation accuracy
-8. rerun the best trial with test evaluation
-9. generate sweep plots
+7. reduce each seed independently and average seeds during plotting
+8. generate sweep plots
 
 Sweep outputs live under:
 
@@ -77,11 +76,21 @@ Sweep outputs live under:
 .optuna_runs/<profile>/<timestamp>_<job-id>/
   optuna.db
   trials/
-    config-0042_sampler=cts_reward=cosine_similarity/
+    config-0042_seed=123_sampler=cts_reward=cosine_similarity/
       attempt-01/results/
-  best_trial_test_eval/results/
   sweep_artifacts/
 ```
+
+Configure repetitions independently from the scientific search space:
+
+```yaml
+optuna:
+  seeds: [123, 124, 125]
+```
+
+Each seed is independently scheduled, retried, and resumed. The plotter groups
+trials by configuration, excluding seed, and warns when expected seeds are
+missing.
 
 ## Search Space Format
 

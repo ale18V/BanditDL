@@ -64,7 +64,7 @@ sbatch \
   topology.nodes=5 \
   optimization.rounds=3 \
   evaluation.evaluation_delta=1 \
-  num_seeds=1 \
+  'optuna.seeds=[123]' \
   identical_initialization=false
 ```
 
@@ -206,7 +206,7 @@ sbatch \
   topology.nodes=15 \
   optimization.rounds=50 \
   evaluation.evaluation_delta=10 \
-  num_seeds=1 \
+  'optuna.seeds=[123]' \
   identical_initialization=false
 ```
 
@@ -255,7 +255,7 @@ sbatch \
   topology.nodes=15 \
   optimization.rounds=50 \
   evaluation.evaluation_delta=10 \
-  num_seeds=1 \
+  'optuna.seeds=[123]' \
   identical_initialization=false
 ```
 
@@ -284,7 +284,7 @@ sbatch \
   topology.nodes=15 \
   optimization.rounds=50 \
   evaluation.evaluation_delta=10 \
-  num_seeds=1 \
+  'optuna.seeds=[123]' \
   identical_initialization=false
 ```
 
@@ -302,7 +302,7 @@ Before launching a long sweep:
 - Confirm the exact `conf/optuna/<profile>.yaml` choices.
 - Confirm `identical_initialization=false` is intended.
 - Confirm `aggregator=mean` if you want unfiltered model averaging.
-- Confirm `num_seeds`.
+- Confirm `optuna.seeds`.
 - Confirm `optimization.rounds`.
 - Confirm `evaluation.evaluation_delta`.
 - Confirm `topology.nodes` and `topology.sampling`.

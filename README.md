@@ -23,15 +23,11 @@ uv run -m banditdl
 Example overrides:
 
 ```bash
-uv run -m banditdl dataset=mnist topology=dynamic sampler=uniform topology.nodes=100 topology.sampling=0.05 seed=0 num_seeds=3
+uv run -m banditdl dataset=mnist topology=dynamic sampler=uniform topology.nodes=100 topology.sampling=0.05 seed=0
 ```
 
-Each configured trial runs `num_seeds` consecutive seeds: `seed`, `seed + 1`,
-and so on. Public artifacts under `results/` are seed-averaged; raw per-seed
-artifacts are kept under `results/seeds/seed_<value>/results/`. Runs print
-lightweight progress to stdout: start metadata, result directory, periodic
-decentralized-learning rounds, evaluation accuracy when available, and
-completion.
+Standalone execution runs exactly one seed. Use the Optuna sweep runner when
+you want replicated configurations with seed averaging.
 
 ## Local Hydra Override
 
@@ -47,7 +43,6 @@ defaults:
   - override /adversary: none
 
 seed: 0
-num_seeds: 3
 device: mps
 
 hydra:
@@ -81,12 +76,13 @@ Behavior:
 - Runs configurations concurrently in spawned processes. `optuna.workers: null`
   means one worker per visible GPU; a larger explicit value shares GPUs
   round-robin.
-- Runs one Optuna trial per non-seed configuration and repeats that configuration `num_seeds` times.
-- Writes seed-averaged artifacts under
-  `<hydra_run>/trials/config-<id>_<params>/attempt-<n>/results/`; raw seed
-  artifacts live in its `seeds/` subfolder.
+- Runs one independent Optuna trial per `(configuration, seed)` pair from
+  `optuna.seeds`.
+- Writes one execution under
+  `<hydra_run>/trials/config-<id>_seed=<seed>_<params>/attempt-<n>/results/`.
 - Persists the Optuna study to `<hydra_run>/optuna.db` for offline sweep plotting.
-- Tracks mean validation accuracy across seeds, selects the best trial, then re-runs all of its seeds with test evaluation under `<hydra_run>/best_trial_test_eval/results`.
+- Sweep plotting reduces each seed independently and then averages seeds belonging
+  to the same configuration.
 - If `plot.enabled: true`, renders configured sweep plots under `<hydra_run>/sweep_artifacts/`.
 
 Sweep plotting is controlled by `conf/sweep.yaml`:
@@ -171,7 +167,7 @@ Sweep roots are named:
 Trial folders include the configuration ID and parameters:
 
 ```text
-trials/config-0042_sampler=cts_reward=cosine_similarity_alpha=0.5/
+trials/config-0042_seed=123_sampler=cts_reward=cosine_similarity_alpha=0.5/
 ```
 
 Note on Hydra composition: `conf/override.yaml` is loaded as the last entry of
@@ -186,7 +182,6 @@ uv run -m banditdl -m \
   topology=dynamic \
   sampler=uniform,bandit \
   seed=0 \
-  num_seeds=3 \
   topology.nodes=50,100 \
   topology.sampling=0.03,0.05 \
   sampler.params.epsilon=0.1,0.3 \
@@ -234,8 +229,7 @@ uv run -m banditdl --cfg job
 - `heterogeneity`: data heterogeneity config group.
 - `optimization`: local optimizer/training schedule config group.
 - `evaluation`: evaluation cadence config group.
-- `seed`: base random seed for one configured trial.
-- `num_seeds`: number of consecutive seeds to run for each configured trial. Metrics and plots aggregate seed results as the outermost reduction.
+- `seed`: random seed for one standalone run.
 - `device`: `auto`, `cpu`, or a torch device string such as `cuda`.
 - `identical_initialization`: defaults to `false`, so honest workers start from
   independently initialized model weights. Set it to `true` to force shared initialization.
@@ -331,13 +325,12 @@ uv run -m banditdl -m \
   topology.nodes=50,100 \
   topology.sampling=0.03,0.05 \
   adversary=none \
-  seed=0 \
-  num_seeds=3
+  seed=0,1,2
 ```
 
 Hydra takes the Cartesian product of comma-separated override values.
-Sweep `seed` only when you want separate base-seed trials; use `num_seeds` for
-seed averaging within each trial.
+For seed-averaged experiments, prefer the Optuna runner with
+`optuna.seeds=[0,1,2]`.
 
 ## How To Create A New Experiment
 
