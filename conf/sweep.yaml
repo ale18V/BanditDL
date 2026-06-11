@@ -7,6 +7,10 @@ hydra:
   run:
     dir: ${oc.env:SCRATCH}/banditdl/optuna_runs/${optuna.name}/${now:%Y-%m-%d_%H-%M-%S}_${oc.env:SLURM_JOB_ID,local}
 
+optuna:
+  seeds:
+    - ${seed}
+
 plot:
   enabled: true
   directions:

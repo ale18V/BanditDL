@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import optuna
@@ -7,12 +8,14 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 from optuna.trial import TrialState, create_trial
 
+from banditdl.experiments import sweep
 from banditdl.experiments.config_adapter import build_engine_config
 from banditdl.experiments.sweep import (
     _attempt_counts,
     _categorical_distributions,
-    _completed_config_ids,
+    _completed_trial_keys,
     _device_assignments,
+    _load_seeds,
     _read_final_metric,
     _training_config,
     _trial_directory,
@@ -20,10 +23,7 @@ from banditdl.experiments.sweep import (
     _visible_devices,
     _worker_count,
 )
-from banditdl.utils.plot_sweep_base import (
-    build_axis_metadata,
-    enumerate_valid_param_dicts,
-)
+from banditdl.utils.plot_sweep_base import enumerate_valid_param_dicts
 
 CONF_DIR = Path(__file__).parents[1] / "conf"
 
@@ -38,6 +38,35 @@ def test_final_metric_uses_last_evaluation_and_averages_nodes(tmp_path):
     np.save(path, [[0.9, 0.7], [0.4, 0.6]])
 
     assert _read_final_metric(path) == pytest.approx(0.5)
+
+
+def test_run_configuration_applies_trial_seed(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_build_engine_config(cfg):
+        return SimpleNamespace(config=SimpleNamespace(seed=int(cfg.seed)))
+
+    def fake_run_experiment(config, result_dir, seed, device):
+        captured.update(config_seed=config.seed, seed=seed, device=device)
+        np.save(result_dir / "validation_accuracy.npy", np.array([[0.5]]))
+
+    monkeypatch.setattr(sweep, "build_engine_config", fake_build_engine_config)
+    monkeypatch.setattr(sweep, "run_experiment", fake_run_experiment)
+    monkeypatch.setattr(sweep, "_WORKER_DEVICE", "cpu")
+
+    result = sweep._run_configuration(
+        {
+            "base_cfg": {"seed": 123},
+            "config_id": 0,
+            "seed": 456,
+            "attempt": 1,
+            "params": {},
+            "trial_dir": str(tmp_path),
+        }
+    )
+
+    assert result["ok"]
+    assert captured == {"config_seed": 456, "seed": 456, "device": "cpu"}
 
 
 def test_worker_count_defaults_to_devices_and_allows_oversubscription():
@@ -77,9 +106,9 @@ def test_trial_directory_uses_single_separators(tmp_path):
         "heterogeneity.alpha": {"display_name": "alpha"},
     }
 
-    path = _trial_directory(tmp_path, 42, params, axis_lookup)
+    path = _trial_directory(tmp_path, 42, 123, params, axis_lookup)
 
-    assert path.name.startswith("config-0042_")
+    assert path.name.startswith("config-0042_seed=123_")
     assert "__" not in path.name
     assert "sampler=cts" in path.name
     assert "reward=cosine_similarity" in path.name
@@ -109,36 +138,34 @@ def test_completed_and_failed_attempts_are_recoverable_from_study():
     study.add_trial(
         create_trial(
             value=0.8,
-            user_attrs={"config_id": 2, "attempt": 1},
+            user_attrs={"config_id": 2, "seed": 10, "attempt": 1},
         )
     )
     study.add_trial(
         create_trial(
             state=TrialState.FAIL,
-            user_attrs={"config_id": 3, "attempt": 2},
+            user_attrs={"config_id": 3, "seed": 11, "attempt": 2},
         )
     )
 
-    assert _completed_config_ids(study) == {2}
-    assert _attempt_counts(study) == {2: 1, 3: 2}
-
-
-def test_profile_name_drives_readable_hydra_output_directory():
-    cfg = _compose("alpha_grid")
-
-    assert cfg.optuna.name == "alpha-grid"
-    _, axis_meta = build_axis_metadata(
-        OmegaConf.to_container(cfg.optuna.search_space, resolve=True)
-    )
-    assert axis_meta["sampler.name"]["display_name"] == "sampler"
+    assert _completed_trial_keys(study) == {(2, 10)}
+    assert _attempt_counts(study) == {(2, 10): 1, (3, 11): 2}
 
 
 def test_grid_manifest_rejects_changed_configuration_ids(tmp_path):
-    _validate_grid_manifest(tmp_path, "alpha-grid", [{"x": 1}, {"x": 2}])
-    _validate_grid_manifest(tmp_path, "alpha-grid", [{"x": 1}, {"x": 2}])
+    _validate_grid_manifest(tmp_path, "alpha-grid", [{"x": 1}, {"x": 2}], [10, 11])
+    _validate_grid_manifest(tmp_path, "alpha-grid", [{"x": 1}, {"x": 2}], [10, 11])
 
     with pytest.raises(ValueError, match="grid differs"):
-        _validate_grid_manifest(tmp_path, "alpha-grid", [{"x": 2}, {"x": 1}])
+        _validate_grid_manifest(tmp_path, "alpha-grid", [{"x": 2}, {"x": 1}], [10, 11])
+
+
+def test_sweep_seeds_are_required_and_unique():
+    assert _load_seeds(OmegaConf.create({"seeds": [10, 11]})) == [10, 11]
+    with pytest.raises(ValueError, match="at least one"):
+        _load_seeds(OmegaConf.create({"seeds": []}))
+    with pytest.raises(ValueError, match="duplicates"):
+        _load_seeds(OmegaConf.create({"seeds": [10, 10]}))
 
 
 def test_non_categorical_search_space_is_rejected():

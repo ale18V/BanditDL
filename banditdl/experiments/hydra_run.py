@@ -9,7 +9,6 @@ from omegaconf import DictConfig, OmegaConf
 from banditdl.experiments.config_adapter import build_engine_config, resolve_device
 from banditdl.experiments.engine import run_experiment
 from banditdl.utils.plotting import plot_all
-from banditdl.utils.seed_averaging import run_seed_averaged
 
 
 @hydra.main(version_base=None, config_path="../../conf", config_name="config")
@@ -22,14 +21,7 @@ def main(cfg: DictConfig) -> None:
 
     output_dir = pathlib.Path(HydraConfig.get().runtime.output_dir)
     result_dir = output_dir / "results"
-    run_seed_averaged(
-        run_once=run_experiment,
-        config=config,
-        result_dir=result_dir,
-        base_seed=config.seed,
-        num_seeds=config.num_seeds,
-        device=device,
-    )
+    run_experiment(config, result_dir, config.seed, device)
 
     plot_all(
         run_dir=result_dir,

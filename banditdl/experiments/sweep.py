@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import json
 import os
 import time
@@ -17,7 +18,7 @@ from omegaconf import DictConfig, OmegaConf
 from optuna.distributions import CategoricalDistribution
 from optuna.trial import TrialState, create_trial
 
-from banditdl.experiments.config_adapter import build_engine_config, resolve_device
+from banditdl.experiments.config_adapter import build_engine_config
 from banditdl.experiments.engine import run_experiment
 from banditdl.utils.plot_sweep_base import (
     STUDY_NAME,
@@ -33,7 +34,6 @@ from banditdl.utils.plot_sweep_base import (
     plot_sweep_from_cfg,
     trial_folder_name,
 )
-from banditdl.utils.seed_averaging import run_seed_averaged, seed_result_dir
 
 _WORKER_DEVICE = "cpu"
 _MAX_ATTEMPTS = 2
@@ -73,22 +73,6 @@ def _read_final_metric(path: Path) -> float:
     return float(np.nanmean(final))
 
 
-def _read_seed_final_metric(
-    result_dir: Path,
-    seeds: list[int],
-    metric_name: str,
-) -> tuple[float, list[float]]:
-    seed_values = [
-        _read_final_metric(seed_result_dir(result_dir, seed) / metric_name) for seed in seeds
-    ]
-    return float(np.mean(seed_values)), seed_values
-
-
-def _resolved_trial_params(trial) -> dict:
-    resolved = trial.user_attrs.get("resolved_params")
-    return dict(resolved) if isinstance(resolved, dict) else dict(trial.params)
-
-
 def _worker_initializer(device_queue, threads: int) -> None:
     global _WORKER_DEVICE  # noqa: PLW0603 - process-local worker state
     _WORKER_DEVICE = device_queue.get()
@@ -97,12 +81,21 @@ def _worker_initializer(device_queue, threads: int) -> None:
         torch.cuda.set_device(_WORKER_DEVICE)
 
 
+def _cleanup_worker() -> None:
+    gc.collect()
+    if _WORKER_DEVICE.startswith("cuda") and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+
+
 def _run_configuration(task: dict) -> dict:
     config_id = int(task["config_id"])
+    seed = int(task["seed"])
     attempt = int(task["attempt"])
     params = dict(task["params"])
     trial_cfg = OmegaConf.create(task["base_cfg"])
     _apply_trial_params(trial_cfg, params)
+    OmegaConf.update(trial_cfg, "seed", seed, merge=False)
 
     trial_dir = Path(task["trial_dir"])
     result_dir = trial_dir / f"attempt-{attempt:02d}" / "results"
@@ -110,27 +103,15 @@ def _run_configuration(task: dict) -> dict:
 
     try:
         config = build_engine_config(_training_config(trial_cfg)).config
-        seeds = run_seed_averaged(
-            run_once=run_experiment,
-            config=config,
-            result_dir=result_dir,
-            base_seed=config.seed,
-            num_seeds=config.num_seeds,
-            device=_WORKER_DEVICE,
-        )
-        value, seed_values = _read_seed_final_metric(
-            result_dir,
-            seeds,
-            "validation_accuracy.npy",
-        )
+        run_experiment(config, result_dir, seed, _WORKER_DEVICE)
+        value = _read_final_metric(result_dir / "validation_accuracy.npy")
         return {
             "ok": True,
             "config_id": config_id,
+            "seed": seed,
             "attempt": attempt,
             "params": params,
             "value": value,
-            "seed_values": seed_values,
-            "seeds": seeds,
             "result_dir": str(result_dir),
             "device": _WORKER_DEVICE,
         }
@@ -138,12 +119,15 @@ def _run_configuration(task: dict) -> dict:
         return {
             "ok": False,
             "config_id": config_id,
+            "seed": seed,
             "attempt": attempt,
             "params": params,
             "result_dir": str(result_dir),
             "device": _WORKER_DEVICE,
             "error": traceback.format_exc(),
         }
+    finally:
+        _cleanup_worker()
 
 
 def _visible_devices(cfg: DictConfig) -> list[str]:
@@ -206,23 +190,26 @@ def _categorical_distributions(search_space: dict) -> dict:
     return distributions
 
 
-def _completed_config_ids(study) -> set[int]:
+def _trial_key(trial) -> tuple[int, int] | None:
+    config_id = trial.user_attrs.get("config_id")
+    seed = trial.user_attrs.get("seed")
+    return None if config_id is None or seed is None else (int(config_id), int(seed))
+
+
+def _completed_trial_keys(study) -> set[tuple[int, int]]:
     return {
-        int(trial.user_attrs["config_id"])
+        key
         for trial in study.trials
-        if trial.state == TrialState.COMPLETE and "config_id" in trial.user_attrs
+        if trial.state == TrialState.COMPLETE and (key := _trial_key(trial)) is not None
     }
 
 
-def _attempt_counts(study) -> dict[int, int]:
-    counts: dict[int, int] = {}
+def _attempt_counts(study) -> dict[tuple[int, int], int]:
+    counts: dict[tuple[int, int], int] = {}
     for trial in study.trials:
-        config_id = trial.user_attrs.get("config_id")
-        if config_id is not None:
-            counts[int(config_id)] = max(
-                counts.get(int(config_id), 0),
-                int(trial.user_attrs.get("attempt", 0)),
-            )
+        key = _trial_key(trial)
+        if key is not None:
+            counts[key] = max(counts.get(key, 0), int(trial.user_attrs.get("attempt", 0)))
     return counts
 
 
@@ -230,6 +217,7 @@ def _record_result(study, result: dict, distributions: dict, output_root: Path) 
     params = result["params"]
     user_attrs = {
         "config_id": result["config_id"],
+        "seed": result["seed"],
         "attempt": result["attempt"],
         "device": result["device"],
         "resolved_params": params,
@@ -238,13 +226,7 @@ def _record_result(study, result: dict, distributions: dict, output_root: Path) 
     }
     used_distributions = {path: distributions[path] for path in params}
     if result["ok"]:
-        user_attrs.update(
-            {
-                "validation_accuracy": result["value"],
-                "validation_accuracy_by_seed": result["seed_values"],
-                "seeds": result["seeds"],
-            }
-        )
+        user_attrs["validation_accuracy"] = result["value"]
         trial = create_trial(
             params=params,
             distributions=used_distributions,
@@ -265,15 +247,16 @@ def _record_result(study, result: dict, distributions: dict, output_root: Path) 
 def _trial_directory(
     output_root: Path,
     config_id: int,
+    seed: int,
     params: dict,
     axis_lookup: dict,
 ) -> Path:
     tokens = trial_folder_name(params, axis_lookup)
     suffix = f"_{tokens}" if tokens else ""
-    return output_root / "trials" / f"config-{config_id:04d}{suffix}"
+    return output_root / "trials" / f"config-{config_id:04d}_seed={seed}{suffix}"
 
 
-def _run_pending(  # noqa: C901 - scheduling and retry policy belong together
+def _run_pending(  # noqa: C901,PLR0912,PLR0915 - scheduling and retry policy belong together
     cfg: DictConfig,
     output_root: Path,
     study,
@@ -284,17 +267,24 @@ def _run_pending(  # noqa: C901 - scheduling and retry policy belong together
     devices = _visible_devices(cfg)
     workers = _worker_count(cfg.optuna, devices)
     threads = _threads_per_worker(workers)
-    completed = _completed_config_ids(study)
+    seeds = _load_seeds(cfg.optuna)
+    completed = _completed_trial_keys(study)
     attempts = _attempt_counts(study)
-    pending = [index for index in range(len(combos)) if index not in completed]
-    exhausted = [config_id for config_id in pending if attempts.get(config_id, 0) >= _MAX_ATTEMPTS]
+    pending = [
+        (config_id, seed)
+        for config_id in range(len(combos))
+        for seed in seeds
+        if (config_id, seed) not in completed
+    ]
+    exhausted = [key for key in pending if attempts.get(key, 0) >= _MAX_ATTEMPTS]
     if exhausted:
-        exhausted_text = ", ".join(f"{config_id:04d}" for config_id in exhausted)
+        exhausted_text = ", ".join(f"{config_id:04d}/seed={seed}" for config_id, seed in exhausted)
         raise RuntimeError(f"Configurations already exhausted both attempts: {exhausted_text}")
     distributions = _categorical_distributions(search_space)
 
     print(
-        f"[optuna] configurations={len(combos)} pending={len(pending)} "
+        f"[optuna] configurations={len(combos)} seeds={seeds} trials={len(combos) * len(seeds)} "
+        f"pending={len(pending)} "
         f"workers={workers} devices={devices} threads_per_worker={threads}"
     )
     if not pending:
@@ -307,7 +297,7 @@ def _run_pending(  # noqa: C901 - scheduling and retry policy belong together
         device_queue.put(device)
 
     base_cfg = OmegaConf.to_container(cfg, resolve=False)
-    failed: list[int] = []
+    failed: list[tuple[int, int]] = []
     completed_now = 0
     started_at = time.monotonic()
     last_progress_at = started_at
@@ -318,17 +308,20 @@ def _run_pending(  # noqa: C901 - scheduling and retry policy belong together
         initargs=(device_queue, threads),
     ) as executor:
         active = {}
-        for config_id in pending:
-            attempt = attempts.get(config_id, 0) + 1
+        for config_id, seed in pending:
+            key = (config_id, seed)
+            attempt = attempts.get(key, 0) + 1
             task = {
                 "base_cfg": base_cfg,
                 "config_id": config_id,
+                "seed": seed,
                 "attempt": attempt,
                 "params": combos[config_id],
                 "trial_dir": str(
                     _trial_directory(
                         output_root,
                         config_id,
+                        seed,
                         combos[config_id],
                         axis_lookup,
                     )
@@ -337,7 +330,7 @@ def _run_pending(  # noqa: C901 - scheduling and retry policy belong together
             active[executor.submit(_run_configuration, task)] = task
             if len(active) <= _QUEUE_PREVIEW:
                 print(
-                    f"[optuna] queued config={config_id:04d} "
+                    f"[optuna] queued config={config_id:04d} seed={seed} "
                     f"attempt={attempt}/{_MAX_ATTEMPTS} params={combos[config_id]}"
                 )
         if len(active) > _QUEUE_PREVIEW:
@@ -352,6 +345,7 @@ def _run_pending(  # noqa: C901 - scheduling and retry policy belong together
                 result = {
                     "ok": False,
                     "config_id": task["config_id"],
+                    "seed": task["seed"],
                     "attempt": task["attempt"],
                     "params": task["params"],
                     "result_dir": str(
@@ -366,6 +360,7 @@ def _run_pending(  # noqa: C901 - scheduling and retry policy belong together
                 elapsed = time.monotonic() - started_at
                 print(
                     f"[optuna] config={result['config_id']:04d} "
+                    f"seed={result['seed']} "
                     f"done={completed_now}/{len(pending)} "
                     f"value={result['value']:.6f} device={result['device']} "
                     f"elapsed={elapsed / 60:.1f}m"
@@ -373,6 +368,7 @@ def _run_pending(  # noqa: C901 - scheduling and retry policy belong together
             elif task["attempt"] < _MAX_ATTEMPTS:
                 print(
                     f"[optuna] config={result['config_id']:04d} "
+                    f"seed={result['seed']} "
                     f"attempt={task['attempt']}/{_MAX_ATTEMPTS} failed; retrying"
                 )
                 retry = dict(task)
@@ -380,21 +376,24 @@ def _run_pending(  # noqa: C901 - scheduling and retry policy belong together
                 retry_result = executor.submit(_run_configuration, retry).result()
                 _record_result(study, retry_result, distributions, output_root)
                 if not retry_result["ok"]:
-                    failed.append(result["config_id"])
+                    failed.append((result["config_id"], result["seed"]))
                     print(
                         f"[optuna] config={result['config_id']:04d} "
+                        f"seed={result['seed']} "
                         f"failed after retry; see {retry_result['result_dir']}"
                     )
                 else:
                     print(
                         f"[optuna] config={retry_result['config_id']:04d} "
+                        f"seed={retry_result['seed']} "
                         f"retry ok value={retry_result['value']:.6f} "
                         f"device={retry_result['device']}"
                     )
             else:
-                failed.append(result["config_id"])
+                failed.append((result["config_id"], result["seed"]))
                 print(
-                    f"[optuna] config={result['config_id']:04d} failed; see {result['result_dir']}"
+                    f"[optuna] config={result['config_id']:04d} seed={result['seed']} "
+                    f"failed; see {result['result_dir']}"
                 )
 
             now = time.monotonic()
@@ -407,34 +406,10 @@ def _run_pending(  # noqa: C901 - scheduling and retry policy belong together
                 last_progress_at = now
 
     if failed:
-        failed_text = ", ".join(f"{config_id:04d}" for config_id in sorted(failed))
+        failed_text = ", ".join(
+            f"{config_id:04d}/seed={seed}" for config_id, seed in sorted(failed)
+        )
         raise RuntimeError(f"Configurations failed after two attempts: {failed_text}")
-
-
-def _run_best_trial_test_evaluation(
-    best_trial,
-    base_cfg: DictConfig,
-    output_root: Path,
-) -> float:
-    best_cfg = _copy_dict_config(base_cfg)
-    _apply_trial_params(best_cfg, _resolved_trial_params(best_trial))
-    OmegaConf.update(best_cfg, "evaluation.evaluate_test", True, merge=False)
-    config = build_engine_config(_training_config(best_cfg)).config
-    result_dir = output_root / "best_trial_test_eval" / "results"
-    aggregate_metric = result_dir / "test_accuracy.npy"
-    if aggregate_metric.exists():
-        return _read_final_metric(aggregate_metric)
-    device = resolve_device(best_cfg)
-    seeds = run_seed_averaged(
-        run_once=run_experiment,
-        config=config,
-        result_dir=result_dir,
-        base_seed=config.seed,
-        num_seeds=config.num_seeds,
-        device=device,
-    )
-    value, _ = _read_seed_final_metric(result_dir, seeds, "test_accuracy.npy")
-    return value
 
 
 def _load_search_space(optuna_cfg) -> dict:
@@ -444,9 +419,20 @@ def _load_search_space(optuna_cfg) -> dict:
     return {str(path): spec for path, spec in raw.items()}
 
 
-def _validate_grid_manifest(output_root: Path, profile: str, combos: list[dict]) -> None:
+def _load_seeds(optuna_cfg) -> list[int]:
+    seeds = [int(seed) for seed in optuna_cfg.get("seeds", [])]
+    if not seeds:
+        raise ValueError("optuna.seeds must contain at least one seed")
+    if len(seeds) != len(set(seeds)):
+        raise ValueError("optuna.seeds must not contain duplicates")
+    return seeds
+
+
+def _validate_grid_manifest(
+    output_root: Path, profile: str, combos: list[dict], seeds: list[int]
+) -> None:
     path = output_root / "grid_manifest.json"
-    manifest = {"profile": profile, "combinations": combos}
+    manifest = {"profile": profile, "seeds": seeds, "combinations": combos}
     if path.exists():
         existing = json.loads(path.read_text())
         if existing != manifest:
@@ -469,7 +455,8 @@ def main(cfg: DictConfig) -> None:
     combos = enumerate_valid_param_dicts(cfg, search_space)
     if not combos:
         raise ValueError("No valid categorical grid combinations found")
-    _validate_grid_manifest(output_root, str(cfg.optuna.name), combos)
+    seeds = _load_seeds(cfg.optuna)
+    _validate_grid_manifest(output_root, str(cfg.optuna.name), combos, seeds)
 
     study = optuna.create_study(
         direction=str(cfg.optuna.direction),
@@ -486,11 +473,6 @@ def main(cfg: DictConfig) -> None:
         axis_lookup,
     )
 
-    best = study.best_trial
-    print(f"[optuna] best config: {best.user_attrs['config_id']:04d}")
-    print(f"[optuna] best final validation accuracy: {best.value:.6f}")
-    final_test_accuracy = _run_best_trial_test_evaluation(best, cfg, output_root)
-    print(f"[optuna] best final test accuracy: {final_test_accuracy:.6f}")
     plot_sweep_from_cfg(output_root, cfg, study=study)
     print(f"[optuna] sweep artifacts: {output_root / 'sweep_artifacts'}")
 
