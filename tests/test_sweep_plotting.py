@@ -1,13 +1,15 @@
 from pathlib import Path
 
-import optuna
 import numpy as np
+import optuna
 
 from banditdl.utils.experiment_table import ExperimentTable, SweepRow
 from banditdl.utils.metrics import scalar_reduce_seed_outer
 from banditdl.utils.plot_sweep_base import (
+    DEFAULT_PLOT_METRICS,
     STUDY_NAME,
     load_sweep_study,
+    metrics_for_plot,
     normalize_direction,
     optuna_storage_url,
 )
@@ -70,6 +72,18 @@ def test_final_direction_uses_last_two_percent_with_seed_outer_average():
 
     assert got == expected
     assert normalize_direction("final") == "final"
+
+
+def test_plot_metrics_are_included_then_excluded():
+    assert metrics_for_plot(
+        {
+            "metrics": ["validation_accuracy", "train_loss", "regret"],
+            "exclude_metrics": ["train_loss"],
+        }
+    ) == ["validation_accuracy", "regret"]
+    assert metrics_for_plot({"exclude_metrics": ["train_loss"]}) == [
+        metric for metric in DEFAULT_PLOT_METRICS if metric != "train_loss"
+    ]
 
 
 def test_optuna_storage_url_is_loadable(tmp_path: Path):

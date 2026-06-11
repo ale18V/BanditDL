@@ -189,6 +189,7 @@ Each heatmap spec defines:
 
 - `x`: x-axis parameter
 - `y`: y-axis parameter
+- `metrics`: metrics to include; defaults to all known metrics
 - `group_by`: how to split into multiple slices
 - `aggregate_by`: how to collapse unused sweep dimensions
 - `render`: output kinds
@@ -226,9 +227,22 @@ Supported values:
 
 `heatmap3d` is experimental.
 
-### `exclude_metrics`
+### `metrics` and `exclude_metrics`
 
-By default, sweep plots try every known scalar metric. Use `exclude_metrics` to suppress metrics for a specific heatmap spec.
+Each specification uses:
+
+```text
+(metrics or all known metrics) - exclude_metrics
+```
+
+Example:
+
+```yaml
+metrics: [validation_accuracy, global_accuracy, train_loss, regret]
+exclude_metrics: [train_loss]
+```
+
+This plots `validation_accuracy`, `global_accuracy`, and `regret`.
 
 ## Per-Parameter Plots
 

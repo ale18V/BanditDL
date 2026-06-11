@@ -103,6 +103,7 @@ plot:
         - [sampler.name, sampler.params.epsilon]
       aggregate_by: avg
       render: [heatmap]
+      metrics: [validation_accuracy, global_accuracy, regret]
       exclude_metrics: []
   per_parameter:
     enabled: false
@@ -114,8 +115,8 @@ plot:
 
 Plotting rules:
 - Heatmaps are explicit; the plotter no longer generates every possible axis pair.
-- All known scalar metrics are plotted by default when present in result folders.
-- `exclude_metrics` removes metrics for a specific plot family/spec.
+- Each plot's `metrics` selects metrics; omitting it selects all known metrics.
+- `exclude_metrics` is subtracted from that plot's selected metrics.
 - `direction` reduces a metric over timesteps/nodes: `avg` or `worse`.
 - `aggregate_by` reduces extra swept dimensions not used by `x`, `y`, or the active `group_by` slice: `avg`, `min`, or `max`.
 - `group_by` creates slices. A string creates one slice per value; a list creates one slice per value combination.

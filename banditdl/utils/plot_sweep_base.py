@@ -370,10 +370,11 @@ def plot_config_from_cfg(cfg):
     }
 
 
-def metrics_for_plot(plot_cfg: dict, exclude=()) -> list[str]:
-    metrics = list(plot_cfg.get("metrics") or DEFAULT_PLOT_METRICS)
-    excluded = set(exclude or ())
-    return [metric for metric in metrics if metric not in excluded]
+def metrics_for_plot(spec: dict) -> list[str]:
+    included = spec.get("metrics")
+    included = DEFAULT_PLOT_METRICS if included is None else included
+    excluded = set(spec.get("exclude_metrics") or ())
+    return [metric for metric in included if metric not in excluded]
 
 
 def plot_sweep_from_cfg(output_root: Path, cfg, study=None, output_dir: Path | None = None) -> None:
@@ -398,7 +399,12 @@ def plot_sweep_from_cfg(output_root: Path, cfg, study=None, output_dir: Path | N
 
 def plot_sweep(plot_cfg, trials_root, study, search_space, output_dir):
     directions = normalize_directions(plot_cfg.get("directions"))
-    all_metrics = metrics_for_plot(plot_cfg)
+    per_param_cfg = plot_cfg.get("per_parameter") or {}
+    heatmap_specs = list(plot_cfg.get("heatmaps") or [])
+    specs = [*heatmap_specs]
+    if bool(per_param_cfg.get("enabled", False)):
+        specs.append(per_param_cfg)
+    all_metrics = list(dict.fromkeys(metric for spec in specs for metric in metrics_for_plot(spec)))
     table = sweep_table_from_study(trials_root, study, search_space, all_metrics, directions)
 
     from banditdl.utils.sweep_plotting import SweepPlotter
@@ -407,16 +413,14 @@ def plot_sweep(plot_cfg, trials_root, study, search_space, output_dir):
 
     for direction in directions:
         # Per parameter plots
-        per_param_cfg = plot_cfg.get("per_parameter") or {}
         if bool(per_param_cfg.get("enabled", False)):
-            metrics = metrics_for_plot(plot_cfg, per_param_cfg.get("exclude_metrics"))
+            metrics = metrics_for_plot(per_param_cfg)
             for metric in metrics:
                 plotter.plot_per_parameter(metric, direction)
 
         # Heatmap plots
-        heatmap_specs = list(plot_cfg.get("heatmaps") or [])
         for spec in heatmap_specs:
-            metrics = metrics_for_plot(plot_cfg, spec.get("exclude_metrics"))
+            metrics = metrics_for_plot(spec)
             plotter.plot_heatmap_spec(spec, metrics, direction)
 
     if bool((plot_cfg.get("single_runs") or {}).get("enabled", False)):
