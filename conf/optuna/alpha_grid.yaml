@@ -18,7 +18,7 @@ search_space:
   heterogeneity.alpha:
     name: alpha
     type: categorical
-    choices: [0.5, 1.0]
+    choices: [1.0, 2.0, 5.0, 10]
   topology.sampling:
     name: sampling
     type: categorical

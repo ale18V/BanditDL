@@ -1,6 +1,6 @@
 name: femnist-pathological-clusters
 direction: maximize
-workers: 8
+workers: 32
 
 plot:
   heatmaps:
@@ -24,28 +24,21 @@ search_space:
     choices:
       - label: c3_k15_s0.3
         params:
-          heterogeneity.method: pathological
-          heterogeneity.alpha: null
           heterogeneity.clusters: 3
-          heterogeneity.classes_per_group: 15
-          heterogeneity.group_overlap: 2
           topology.sampling: 0.3
       - label: c5_k9_s0.2
         params:
-          heterogeneity.method: pathological
-          heterogeneity.alpha: null
           heterogeneity.clusters: 5
-          heterogeneity.classes_per_group: 9
-          heterogeneity.group_overlap: 2
           topology.sampling: 0.2
       - label: c10_k4_s0.1
         params:
-          heterogeneity.method: pathological
-          heterogeneity.alpha: null
           heterogeneity.clusters: 10
-          heterogeneity.classes_per_group: 4
-          heterogeneity.group_overlap: 2
           topology.sampling: 0.1
+  
+  heterogeneity.alpha:
+    name: alpha
+    type: categorical
+    choices: [0.5, 1.0, 5.0, 10]
   sampler.name:
     name: sampler
     type: categorical
@@ -77,6 +70,6 @@ search_space:
   sampler.params.discount:
     name: discount
     type: categorical
-    choices: [0.99]
+    choices: [0.9]
     when:
       sampler.name: [discounted_cucb, discounted_cts]

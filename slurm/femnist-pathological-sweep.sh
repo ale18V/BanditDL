@@ -7,7 +7,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=460000
-#SBATCH --time=9:00:00
+#SBATCH --time=10:00:00
 #SBATCH --partition=normal
 #SBATCH --gpus-per-node=4
 #SBATCH --environment=banditdl
@@ -32,7 +32,6 @@ export UV_PROJECT_ENVIRONMENT="${SCRATCH:-/ioscratch}/banditdl/venv"
 export UV_LINK_MODE=copy
 export HYDRA_FULL_ERROR=1
 export PYTHONUNBUFFERED=1
-export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 echo "job_id=${SLURM_JOB_ID:-none}"
 echo "node_list=${SLURM_JOB_NODELIST:-none}"
@@ -44,8 +43,7 @@ uv --version
 uv sync --frozen
 
 uv run python -m banditdl.experiments.sweep \
-  optuna=femnist_pathological_clusters \
-  optuna.workers=16 \
+  optuna=femnist_alpha_clusters \
   dataset=femnist_pool \
   optimization=opt_femnist \
   topology=dynamic \
@@ -56,5 +54,6 @@ uv run python -m banditdl.experiments.sweep \
   identical_initialization=true \
   runtime.local_training=batched \
   runtime.clients_per_batch=30 \
+  heterogeneity.method=dirichlet \
   device=cuda \
   "$@"

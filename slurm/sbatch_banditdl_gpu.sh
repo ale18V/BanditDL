@@ -45,6 +45,7 @@ export BANDITDL_DATASET_ROOT="${BANDITDL_DATASET_ROOT:-$HOME/BanditDL/banditdl/d
 export PYTHONUNBUFFERED=1
 export HYDRA_FULL_ERROR=1
 
+
 # Inject device=cuda if the caller did not provide their own device override.
 HAS_DEVICE=false
 for arg in "$@"; do
@@ -53,6 +54,8 @@ done
 if ! $HAS_DEVICE; then
     set -- device=cuda "$@"
 fi
+
+
 
 echo "[sbatch] job_id=$SLURM_JOB_ID job_name=$SLURM_JOB_NAME node=$SLURMD_NODENAME"
 echo "[sbatch] gpus=${CUDA_VISIBLE_DEVICES:-unset} cpus=${SLURM_CPUS_PER_TASK:-?} mem=${SLURM_MEM_PER_NODE:-?}M"

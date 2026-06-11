@@ -5,7 +5,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=460000
-#SBATCH --time=00:30:00
+#SBATCH --time=01:30:00
 #SBATCH --partition=debug
 #SBATCH --gpus-per-node=4
 #SBATCH --environment=banditdl
@@ -13,6 +13,7 @@
 #SBATCH --error=job_output/%j.err
 
 set -euo pipefail
+
 
 REPO="${SLURM_SUBMIT_DIR:-$(pwd)}"
 REPO="$(git -C "$REPO" rev-parse --show-toplevel)"
@@ -41,13 +42,13 @@ uv --version
 uv sync --frozen
 
 uv run python -m banditdl.experiments.sweep \
-  dataset=cifar10 \
-  optimization=opt_cifar10 \
+  dataset=femnist \
+  optimization=opt_femnist \
   topology=dynamic \
   optuna=customsweep \
-  topology.nodes=60 \
+  hydra.run.dir=${SCRATCH:-/ioscratch}/banditdl/optuna_runs/femnist-pre-sweep/2026-06-09_20-04-54_2509140/ \
   evaluation.evaluation_delta=25 \
-  num_seeds=1 \
-  identical_initialization=false \
+  num_seeds=3 \
+  identical_initialization=true \
   device=cuda \
   "$@"
