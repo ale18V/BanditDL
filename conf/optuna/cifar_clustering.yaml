@@ -1,0 +1,24 @@
+name: cifar-clustering
+direction: maximize
+workers: 40
+
+plot:
+  directions: [final]
+  heatmaps: []
+  lines:
+    - x: sampler.name
+      group_by:
+        - sampler.reward
+      aggregate_by: avg
+      metrics: [validation_accuracy, global_accuracy]
+      exclude_metrics: []
+
+search_space:
+  sampler.name:
+    name: sampler
+    type: categorical
+    choices: [uniform, epsilon_greedy, cucb, cts]
+  sampler.reward:
+    name: reward
+    type: categorical
+    choices: [parameter_distance, update_cosine_similarity]

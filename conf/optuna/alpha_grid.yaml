@@ -1,4 +1,4 @@
-name: alpha-grid
+name: alpha_sampling_femnist
 direction: maximize
 workers: null
 
