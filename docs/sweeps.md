@@ -215,7 +215,7 @@ Meaning:
 - a string creates one slice per value
 - a list creates one slice per value combination
 - omitting `split_by` splits by the Cartesian combinations of every unused
-  swept parameter
+  parameter with more than one observed value
 - `split_by: []` disables splitting and aggregates unused dimensions
 
 ### `aggregate_by`

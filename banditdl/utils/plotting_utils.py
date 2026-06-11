@@ -52,11 +52,23 @@ def normalize_groups(raw) -> list[tuple[str, ...]]:
 def split_schemes(table, spec: dict, used_paths: tuple[str, ...]) -> list[tuple[str, ...]]:
     if "split_by" in spec:
         return normalize_groups(spec["split_by"])
-    axes = getattr(table, "axes_meta", [])
-    paths = tuple(axis.path for axis in axes if axis.path not in used_paths)
-    if not axes:
-        paths = tuple(path for path in table.param_keys if path not in used_paths)
+    paths = tuple(
+        path
+        for path in sorted({path for row in table.rows for path in row.params})
+        if path not in used_paths
+        and len({row.params[path] for row in table.rows if row.params.get(path) is not None}) > 1
+    )
     return [paths]
+
+
+def validate_paths(table, paths: tuple[str, ...], field: str) -> None:
+    available = {path for row in table.rows for path in row.params}
+    missing = [path for path in paths if path not in available]
+    if missing:
+        raise ValueError(
+            f"Unknown {field} parameter(s): {', '.join(missing)}. "
+            f"Available: {', '.join(sorted(available))}"
+        )
 
 
 def normalize_render(raw) -> list[str]:
@@ -115,15 +127,18 @@ def axis_path(table, paths: tuple[str, ...]) -> str:
 
 
 def split_filters(rows, paths: tuple[str, ...]) -> list[dict]:
+    paths = tuple(
+        path for path in paths if any(row.params.get(path) is not None for row in rows)
+    )
     if not paths:
         return [{}]
     combinations = {
-        tuple(row.params.get(path) for path in paths)
+        tuple(row.params[path] for path in paths)
         for row in rows
-        if any(path in row.params for path in paths)
+        if all(row.params.get(path) is not None for path in paths)
     }
     return [
-        {path: value for path, value in zip(paths, values, strict=True) if value is not None}
+        dict(zip(paths, values, strict=True))
         for values in sorted(combinations, key=lambda values: tuple(map(sort_key, values)))
     ]
 

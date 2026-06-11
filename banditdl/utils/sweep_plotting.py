@@ -30,6 +30,7 @@ from banditdl.utils.plotting_utils import (
     split_label,
     split_path,
     split_schemes,
+    validate_paths,
 )
 
 
@@ -56,10 +57,13 @@ class SweepPlotter:
     def plot_line_spec(self, spec: dict, metrics: list[str], direction: str) -> None:
         if not (x_path := spec.get("x")):
             return
+        validate_paths(self.table, (x_path,), "line x-axis")
         mode = str(spec.get("aggregate_by", "avg"))
         for paths in normalize_groups(spec.get("group_by")):
+            validate_paths(self.table, paths, "line group_by")
             used = (x_path, *paths)
             for split_paths in split_schemes(self.table, spec, used):
+                validate_paths(self.table, split_paths, "line split_by")
                 for split in split_filters(self.table.rows, split_paths):
                     for metric in metrics:
                         self._plot_lines(metric, direction, x_path, paths, split, mode)
@@ -126,9 +130,12 @@ class SweepPlotter:
         if not spec.get("x") or not spec.get("y"):
             return
         x_paths, y_paths = normalize_axis(spec["x"]), normalize_axis(spec["y"])
+        validate_paths(self.table, x_paths, "heatmap x-axis")
+        validate_paths(self.table, y_paths, "heatmap y-axis")
         mode = str(spec.get("aggregate_by", "avg"))
         render = normalize_render(spec.get("render"))
         for paths in split_schemes(self.table, spec, (*x_paths, *y_paths)):
+            validate_paths(self.table, paths, "heatmap split_by")
             for split in split_filters(self.table.rows, paths):
                 for metric in metrics:
                     self.plot_heatmap(

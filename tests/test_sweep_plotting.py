@@ -15,7 +15,12 @@ from banditdl.utils.plot_sweep_base import (
     optuna_storage_url,
     sweep_table_from_study,
 )
-from banditdl.utils.plotting_utils import axis_values, matches_axis, matches_split
+from banditdl.utils.plotting_utils import (
+    axis_values,
+    matches_axis,
+    matches_split,
+    split_filters,
+)
 from banditdl.utils.sweep_plotting import SweepPlotter
 
 
@@ -170,6 +175,19 @@ def test_missing_conditional_parameter_matches_every_split():
     assert not matches_split({"reward": "cosine"}, {"reward": "distance"})
 
 
+def test_missing_conditional_parameter_does_not_create_its_own_split():
+    rows = [
+        SweepRow({"sampler": "uniform", "alpha": 1}, {}),
+        SweepRow({"sampler": "cucb", "reward": "distance", "alpha": 1}, {}),
+        SweepRow({"sampler": "cucb", "reward": "cosine", "alpha": 1}, {}),
+    ]
+
+    assert split_filters(rows, ("reward", "alpha")) == [
+        {"reward": "cosine", "alpha": 1},
+        {"reward": "distance", "alpha": 1},
+    ]
+
+
 def test_split_by_generates_separate_heatmaps(tmp_path: Path):
     rows = [
         SweepRow({"x": 1, "y": 1, "reward": reward}, {"accuracy__final": value})
@@ -205,6 +223,30 @@ def test_missing_split_by_uses_all_unused_dimensions(tmp_path: Path):
     root = tmp_path / "heatmap" / "direction=avg" / "axes=x_y"
     assert (root / "reward=distance__sampling=0_1" / "m.png").exists()
     assert (root / "reward=cosine__sampling=0_2" / "m.png").exists()
+
+
+def test_default_split_ignores_single_valued_parameters(tmp_path: Path):
+    rows = [
+        SweepRow({"x": 1, "y": 1, "reward": reward, "exploration": 1.0}, {"m__avg": 1})
+        for reward in ("distance", "cosine")
+    ]
+    plotter = SweepPlotter(ExperimentTable(rows), tmp_path)
+
+    plotter.plot_heatmap_spec({"x": "x", "y": "y"}, ["m"], "avg")
+
+    root = tmp_path / "heatmap" / "direction=avg" / "axes=x_y"
+    assert (root / "reward=distance" / "m.png").exists()
+    assert not any("exploration" in str(path) for path in root.rglob("*"))
+
+
+def test_invalid_heatmap_axis_fails_loudly(tmp_path: Path):
+    plotter = SweepPlotter(
+        ExperimentTable([SweepRow({"x": 1, "y": 1}, {"m__avg": 1})]),
+        tmp_path,
+    )
+
+    with pytest.raises(ValueError, match=r"Unknown heatmap y-axis.*clusters"):
+        plotter.plot_heatmap_spec({"x": "x", "y": "partition.clusters"}, ["m"], "avg")
 
 
 def test_empty_split_by_aggregates_unused_dimensions(tmp_path: Path):
