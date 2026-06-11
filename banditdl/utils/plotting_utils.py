@@ -52,9 +52,15 @@ def normalize_groups(raw) -> list[tuple[str, ...]]:
 def split_schemes(table, spec: dict, used_paths: tuple[str, ...]) -> list[tuple[str, ...]]:
     if "split_by" in spec:
         return normalize_groups(spec["split_by"])
+    axes = getattr(table, "axes_meta", [])
+    candidates = (
+        [axis.path for axis in axes]
+        if axes
+        else sorted({path for row in table.rows for path in row.params})
+    )
     paths = tuple(
         path
-        for path in sorted({path for row in table.rows for path in row.params})
+        for path in candidates
         if path not in used_paths
         and len({row.params[path] for row in table.rows if row.params.get(path) is not None}) > 1
     )

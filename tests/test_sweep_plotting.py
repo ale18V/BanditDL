@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import optuna
@@ -237,6 +238,34 @@ def test_default_split_ignores_single_valued_parameters(tmp_path: Path):
     root = tmp_path / "heatmap" / "direction=avg" / "axes=x_y"
     assert (root / "reward=distance" / "m.png").exists()
     assert not any("exploration" in str(path) for path in root.rglob("*"))
+
+
+def test_default_split_ignores_tuple_derived_parameters(tmp_path: Path):
+    table = ExperimentTable(
+        [
+            SweepRow(
+                {
+                    "x": 1,
+                    "y": 1,
+                    "partition": partition,
+                    "clusters": clusters,
+                    "sampling": sampling,
+                },
+                {"m__avg": 1},
+            )
+            for partition, clusters, sampling in [("p3", 3, 0.3), ("p5", 5, 0.2)]
+        ]
+    )
+    table.axes_meta = [
+        SimpleNamespace(path=path, display_name=path)
+        for path in ("x", "y", "partition")
+    ]
+
+    SweepPlotter(table, tmp_path).plot_heatmap_spec({"x": "x", "y": "y"}, ["m"], "avg")
+
+    root = tmp_path / "heatmap" / "direction=avg" / "axes=x_y"
+    assert (root / "partition=p3" / "m.png").exists()
+    assert not any("clusters" in str(path) or "sampling" in str(path) for path in root.rglob("*"))
 
 
 def test_invalid_heatmap_axis_fails_loudly(tmp_path: Path):
