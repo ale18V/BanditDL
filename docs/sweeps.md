@@ -159,6 +159,9 @@ plot:
   per_parameter:
     enabled: false
     exclude_metrics: []
+
+  single_runs:
+    enabled: false
 ```
 
 ## Plotting Fields
@@ -239,6 +242,22 @@ per_parameter:
 ```
 
 `exclude_metrics` works the same way there.
+
+## Single-Run Plots
+
+Enable standard runtime plots for every completed trial:
+
+```yaml
+single_runs:
+  enabled: true
+```
+
+They are written to each trial's `attempt-*/plots/` directory. For an existing
+sweep, enable them without editing its stored config:
+
+```bash
+uv run python scripts/plot_sweep.py <sweep-dir> --single-runs
+```
 
 ## Practical Recommendations
 

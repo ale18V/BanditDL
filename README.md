@@ -107,6 +107,9 @@ plot:
   per_parameter:
     enabled: false
     exclude_metrics: []
+
+  single_runs:
+    enabled: false
 ```
 
 Plotting rules:
@@ -127,6 +130,9 @@ Offline plotting can regenerate sweep plots without rerunning training:
 ```bash
 uv run python scripts/plot_sweep.py .hydra_runs/<date>/<time>
 ```
+
+Add `--single-runs` to also generate standard runtime plots for every completed
+trial under its `attempt-*/plots/` directory.
 
 Use a custom output directory if desired:
 

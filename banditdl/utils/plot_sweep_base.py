@@ -11,6 +11,7 @@ from omegaconf import OmegaConf
 
 from banditdl.utils.experiment_table import ExperimentTable, SweepRow
 from banditdl.utils.metrics import MetricLoader, scalar_reduce_seed_outer
+from banditdl.utils.plotting import plot_all
 
 DEFAULT_PLOT_METRICS: tuple[str, ...] = (
     "validation_accuracy",
@@ -417,3 +418,22 @@ def plot_sweep(plot_cfg, trials_root, study, search_space, output_dir):
         for spec in heatmap_specs:
             metrics = metrics_for_plot(plot_cfg, spec.get("exclude_metrics"))
             plotter.plot_heatmap_spec(spec, metrics, direction)
+
+    if bool((plot_cfg.get("single_runs") or {}).get("enabled", False)):
+        plot_single_runs(trials_root, study, search_space)
+
+
+def plot_single_runs(trials_root: Path, study, search_space) -> None:
+    _, axis_meta = build_axis_metadata(search_space)
+    for trial in study.trials:
+        if trial.state != optuna.trial.TrialState.COMPLETE:
+            continue
+        params = trial_params_for_table(trial)
+        if not params:
+            continue
+        result_dir = trial_result_dir(Path(trials_root), trial, params, axis_meta)
+        if not result_dir.is_dir():
+            print(f"[plot_sweep] WARNING: missing trial results: {result_dir}")
+            continue
+        print(f"[plot_sweep] plotting trial: {result_dir}")
+        plot_all(result_dir, result_dir.parent / "plots", run_label=result_dir.parent.parent.name)
