@@ -401,7 +401,8 @@ def plot_sweep(plot_cfg, trials_root, study, search_space, output_dir):
     directions = normalize_directions(plot_cfg.get("directions"))
     per_param_cfg = plot_cfg.get("per_parameter") or {}
     heatmap_specs = list(plot_cfg.get("heatmaps") or [])
-    specs = [*heatmap_specs]
+    line_specs = list(plot_cfg.get("lines") or [])
+    specs = [*heatmap_specs, *line_specs]
     if bool(per_param_cfg.get("enabled", False)):
         specs.append(per_param_cfg)
     all_metrics = list(dict.fromkeys(metric for spec in specs for metric in metrics_for_plot(spec)))
@@ -422,6 +423,11 @@ def plot_sweep(plot_cfg, trials_root, study, search_space, output_dir):
         for spec in heatmap_specs:
             metrics = metrics_for_plot(spec)
             plotter.plot_heatmap_spec(spec, metrics, direction)
+
+        # Declarative line plots
+        for spec in line_specs:
+            metrics = metrics_for_plot(spec)
+            plotter.plot_line_spec(spec, metrics, direction)
 
     if bool((plot_cfg.get("single_runs") or {}).get("enabled", False)):
         plot_single_runs(trials_root, study, search_space)

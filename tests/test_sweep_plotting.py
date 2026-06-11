@@ -64,6 +64,41 @@ def test_heatmap_spec_writes_3d_plot(tmp_path: Path):
     assert (tmp_path / "heatmap3d" / "direction=avg" / "axes=x_y" / "all" / "metric.png").exists()
 
 
+def test_line_spec_groups_conditional_parameters_into_lines(tmp_path: Path):
+    rows = [
+        SweepRow({"sampling": 0.1, "sampler": "cucb"}, {"accuracy__final": 0.5}),
+        SweepRow({"sampling": 0.2, "sampler": "cucb"}, {"accuracy__final": 0.6}),
+        SweepRow(
+            {"sampling": 0.1, "sampler": "discounted_cucb", "discount": 0.9},
+            {"accuracy__final": 0.7},
+        ),
+        SweepRow(
+            {"sampling": 0.2, "sampler": "discounted_cucb", "discount": 0.9},
+            {"accuracy__final": 0.8},
+        ),
+    ]
+    plotter = SweepPlotter(ExperimentTable(rows), tmp_path)
+
+    plotter.plot_line_spec(
+        {
+            "x": "sampling",
+            "group_by": [["sampler", "discount"]],
+            "aggregate_by": "avg",
+        },
+        ["accuracy"],
+        "final",
+    )
+
+    assert (
+        tmp_path
+        / "line"
+        / "direction=final"
+        / "x=sampling"
+        / "group=sampler_discount"
+        / "accuracy.png"
+    ).exists()
+
+
 def test_final_direction_uses_last_two_percent_with_seed_outer_average():
     values = np.arange(2 * 100 * 3, dtype=float).reshape(2, 100, 3)
 

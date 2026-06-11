@@ -109,6 +109,14 @@ plot:
     enabled: false
     exclude_metrics: []
 
+  lines:
+    - x: topology.sampling
+      metrics: [global_accuracy]
+      group_by:
+        - [sampler.name, sampler.params.discount]
+      aggregate_by: avg
+      exclude_metrics: []
+
   single_runs:
     enabled: false
 ```
@@ -120,6 +128,7 @@ Plotting rules:
 - `direction` reduces a metric over timesteps/nodes: `avg` or `worse`.
 - `aggregate_by` reduces extra swept dimensions not used by `x`, `y`, or the active `group_by` slice: `avg`, `min`, or `max`.
 - `group_by` creates slices. A string creates one slice per value; a list creates one slice per value combination.
+- In `lines`, each `group_by` combination becomes one line.
 - Heatmap color scales are shared across slices for the same heatmap spec,
   metric, and direction.
 - `render` defaults to `[heatmap]`; add `heatmap3d` for experimental static

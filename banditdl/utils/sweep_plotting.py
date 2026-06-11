@@ -59,8 +59,8 @@ def _normalize_groups(raw) -> list[tuple[str, ...]]:
 def _normalize_render(raw) -> list[str]:
     render = raw if isinstance(raw, list) else [raw or "heatmap"]
     result = []
-    for item in render:
-        item = str(item)
+    for raw_item in render:
+        item = str(raw_item)
         if item not in {"heatmap", "heatmap3d"}:
             raise ValueError("render entries must be heatmap or heatmap3d")
         if item not in result:
@@ -162,6 +162,86 @@ class SweepPlotter:
                         aggregate_by=aggregate_by,
                         render=render,
                     )
+
+    def plot_line_spec(self, spec: dict, metrics: list[str], direction: str) -> None:
+        x_path = spec.get("x")
+        if not x_path:
+            return
+        aggregate_by = str(spec.get("aggregate_by", "avg"))
+        fixed = dict(spec.get("fixed") or {})
+        for group_paths in _normalize_groups(spec.get("group_by")):
+            for metric in metrics:
+                self._save_lines(
+                    metric,
+                    direction,
+                    x_path,
+                    group_paths,
+                    fixed,
+                    aggregate_by,
+                )
+
+    def _save_lines(
+        self,
+        metric: str,
+        direction: str,
+        x_path: str,
+        group_paths: tuple[str, ...],
+        fixed: dict,
+        aggregate_by: str,
+    ) -> None:
+        column_key = column_key_for(metric, direction)
+        grouped = {}
+        for row in self.table.filter(fixed).rows:
+            if x_path not in row.params or column_key not in row.metrics:
+                continue
+            group = tuple(row.params.get(path) for path in group_paths)
+            grouped.setdefault(group, {}).setdefault(row.params[x_path], []).append(
+                row.metrics[column_key]
+            )
+        if not grouped:
+            return
+
+        fig, ax = plt.subplots(figsize=(8, 5))
+        for index, (group, points) in enumerate(
+            sorted(grouped.items(), key=lambda item: str(item[0]))
+        ):
+            xs = sorted(points, key=_sort_key)
+            ys = [_aggregate(points[x], aggregate_by) for x in xs]
+            ax.plot(
+                xs,
+                ys,
+                marker="o",
+                color=_cycle_color(index),
+                label=self._line_label(group_paths, group),
+            )
+
+        ax.set_xlabel(self._display_name(x_path))
+        ax.set_ylabel(f"{metric} ({direction})")
+        ax.set_title(f"{metric} ({direction})")
+        if group_paths:
+            ax.legend(loc="best", fontsize=8)
+        ax.grid(True, alpha=0.25)
+
+        group_name = "_".join(self._display_name(path) for path in group_paths) or "all"
+        output = (
+            self.output_dir
+            / "line"
+            / f"direction={direction}"
+            / f"x={_sanitize_label(self._display_name(x_path))}"
+            / f"group={_sanitize_label(group_name)}"
+            / f"{metric}.png"
+        )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output, dpi=160, bbox_inches="tight")
+        plt.close(fig)
+
+    def _line_label(self, paths: tuple[str, ...], values: tuple) -> str:
+        parts = [
+            f"{self._display_name(path)}={value}"
+            for path, value in zip(paths, values, strict=True)
+            if value is not None
+        ]
+        return ", ".join(parts) or "all"
 
     def plot_heatmap(
         self,

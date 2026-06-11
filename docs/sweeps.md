@@ -244,6 +244,30 @@ exclude_metrics: [train_loss]
 
 This plots `validation_accuracy`, `global_accuracy`, and `regret`.
 
+## Line Plots
+
+`plot.lines` uses the same metric selection and aggregation fields as heatmaps:
+
+```yaml
+lines:
+  - x: topology.sampling
+    metrics: [global_accuracy]
+    group_by:
+      - [sampler.name, sampler.params.discount]
+    aggregate_by: avg
+    exclude_metrics: []
+```
+
+- `x` is the horizontal parameter axis.
+- The selected metric is the vertical axis.
+- Every observed `group_by` combination becomes a line.
+- Parameters outside `x` and `group_by` are reduced with `aggregate_by`.
+- Missing conditional values are retained. For example, CUCB is labelled
+  `sampler=cucb`, while discounted CUCB includes its discount.
+
+As with heatmaps, multiple entries in `group_by` request multiple grouping
+schemes and therefore multiple figures.
+
 ## Per-Parameter Plots
 
 `plot.per_parameter.enabled` controls whether the per-parameter plotter runs.
