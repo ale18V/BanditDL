@@ -12,6 +12,8 @@ from omegaconf import OmegaConf
 from banditdl.utils.experiment_table import ExperimentTable, SweepRow
 from banditdl.utils.metrics import MetricLoader, scalar_reduce_seed_outer
 from banditdl.utils.plotting import plot_all
+from banditdl.utils.plotting_utils import metric_column
+from banditdl.utils.sweep_plotting import SweepPlotter
 
 DEFAULT_PLOT_METRICS: tuple[str, ...] = (
     "validation_accuracy",
@@ -37,7 +39,6 @@ DEFAULT_PLOT_METRICS: tuple[str, ...] = (
 )
 
 DEFAULT_DIRECTIONS: tuple[str, ...] = ("final", "avg", "worse")
-DEFAULT_PLOT_MODES: tuple[str, ...] = ("per_parameter", "heatmap")
 STUDY_NAME = "sweep"
 OPTUNA_DB_NAME = "optuna.db"
 
@@ -74,25 +75,6 @@ def normalize_directions(value):
         if direction not in directions:
             directions.append(direction)
     return directions or list(DEFAULT_DIRECTIONS)
-
-
-def normalize_plot_modes(value):
-    if value is None:
-        return list(DEFAULT_PLOT_MODES)
-    raw = OmegaConf.to_container(value, resolve=True) if OmegaConf.is_config(value) else value
-    if isinstance(raw, str) or not isinstance(raw, (list, tuple)):
-        raw = [raw]
-    valid = set(DEFAULT_PLOT_MODES) | {"all_together"}
-    modes = []
-    for item in raw:
-        mode = str(item).lower().strip()
-        if mode not in valid:
-            raise ValueError(
-                f"Unsupported plot_mode '{item}'. Allowed: {', '.join(sorted(valid))}."
-            )
-        if mode not in modes:
-            modes.append(mode)
-    return modes or list(DEFAULT_PLOT_MODES)
 
 
 def _strip_meta(spec):
@@ -242,10 +224,6 @@ def scalar_for_direction(metric_name, array_values, direction):
     return scalar_reduce_seed_outer(metric_name, array_values, direction)
 
 
-def column_key_for(metric_name, direction):
-    return f"{metric_name}__{direction}"
-
-
 def build_axis_metadata(search_space):
     ordered_paths, _, _display_names = _normalize_search_space(search_space)
     axes = []
@@ -331,7 +309,7 @@ def sweep_table_from_study(
                 print(f"[plot_sweep] WARNING: skip metric '{metric}' for trial {result_dir}: {exc}")
                 continue
             for direction in directions:
-                metrics_flat[column_key_for(metric, direction)] = scalar_for_direction(
+                metrics_flat[metric_column(metric, direction)] = scalar_for_direction(
                     metric, raw, direction
                 )
         rows.append(SweepRow(params=trial_params, metrics=metrics_flat))
@@ -359,15 +337,7 @@ def plot_config_from_cfg(cfg):
         )
     if plot_cfg is not None:
         return OmegaConf.to_container(plot_cfg, resolve=True)
-    # Legacy shape from older sweep.yaml revisions.
-    return {
-        "enabled": True,
-        "directions": cfg.get("direction"),
-        "modes": cfg.get("plot_mode"),
-        "metrics": cfg.get("plot_metrics"),
-        "heatmaps": [],
-        "per_parameter": {"enabled": "per_parameter" in normalize_plot_modes(cfg.get("plot_mode"))},
-    }
+    return {"enabled": False}
 
 
 def metrics_for_plot(spec: dict) -> list[str]:
@@ -399,32 +369,19 @@ def plot_sweep_from_cfg(output_root: Path, cfg, study=None, output_dir: Path | N
 
 def plot_sweep(plot_cfg, trials_root, study, search_space, output_dir):
     directions = normalize_directions(plot_cfg.get("directions"))
-    per_param_cfg = plot_cfg.get("per_parameter") or {}
     heatmap_specs = list(plot_cfg.get("heatmaps") or [])
     line_specs = list(plot_cfg.get("lines") or [])
     specs = [*heatmap_specs, *line_specs]
-    if bool(per_param_cfg.get("enabled", False)):
-        specs.append(per_param_cfg)
     all_metrics = list(dict.fromkeys(metric for spec in specs for metric in metrics_for_plot(spec)))
     table = sweep_table_from_study(trials_root, study, search_space, all_metrics, directions)
-
-    from banditdl.utils.sweep_plotting import SweepPlotter
 
     plotter = SweepPlotter(table, output_dir)
 
     for direction in directions:
-        # Per parameter plots
-        if bool(per_param_cfg.get("enabled", False)):
-            metrics = metrics_for_plot(per_param_cfg)
-            for metric in metrics:
-                plotter.plot_per_parameter(metric, direction)
-
-        # Heatmap plots
         for spec in heatmap_specs:
             metrics = metrics_for_plot(spec)
             plotter.plot_heatmap_spec(spec, metrics, direction)
 
-        # Declarative line plots
         for spec in line_specs:
             metrics = metrics_for_plot(spec)
             plotter.plot_line_spec(spec, metrics, direction)

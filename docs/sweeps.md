@@ -156,10 +156,6 @@ plot:
       render: [heatmap]
       exclude_metrics: []
 
-  per_parameter:
-    enabled: false
-    exclude_metrics: []
-
   single_runs:
     enabled: false
 ```
@@ -268,19 +264,6 @@ lines:
 As with heatmaps, multiple entries in `group_by` request multiple grouping
 schemes and therefore multiple figures.
 
-## Per-Parameter Plots
-
-`plot.per_parameter.enabled` controls whether the per-parameter plotter runs.
-
-Example:
-
-```yaml
-per_parameter:
-  enabled: false
-```
-
-`exclude_metrics` works the same way there.
-
 ## Single-Run Plots
 
 Enable standard runtime plots for every completed trial:
@@ -316,8 +299,6 @@ plot:
         - train_loss
         - gradient_norms
 
-  per_parameter:
-    enabled: false
 ```
 
 Then run:
@@ -335,7 +316,6 @@ effective plotting configuration stored by Hydra.
 
 If you want a small sweep artifact set:
 
-- keep `per_parameter.enabled: false`
 - define only the heatmaps you actually care about
 - use `exclude_metrics` aggressively
 

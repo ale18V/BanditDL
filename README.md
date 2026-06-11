@@ -105,10 +105,6 @@ plot:
       render: [heatmap]
       metrics: [validation_accuracy, global_accuracy, regret]
       exclude_metrics: []
-  per_parameter:
-    enabled: false
-    exclude_metrics: []
-
   lines:
     - x: topology.sampling
       metrics: [global_accuracy]
@@ -133,7 +129,6 @@ Plotting rules:
   metric, and direction.
 - `render` defaults to `[heatmap]`; add `heatmap3d` for experimental static
   3D surfaces under `sweep_artifacts/heatmap3d/`.
-- `per_parameter` remains available but is disabled by default.
 
 Offline plotting can regenerate sweep plots without rerunning training:
 

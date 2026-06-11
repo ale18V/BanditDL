@@ -26,9 +26,5 @@ plot:
       render: [heatmap]
       exclude_metrics: []
 
-  per_parameter:
-    enabled: false
-    exclude_metrics: []
-
   single_runs:
     enabled: false
