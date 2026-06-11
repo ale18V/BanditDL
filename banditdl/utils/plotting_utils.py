@@ -65,6 +65,12 @@ def display_name(table, path: str) -> str:
     return path.rsplit(".", 1)[-1]
 
 
+def expand_fixed(fixed: dict) -> list[dict]:
+    keys = list(fixed)
+    values = [value if isinstance(value, list) else [value] for value in fixed.values()]
+    return [dict(zip(keys, combination, strict=True)) for combination in product(*values)]
+
+
 def group_filters(rows, paths: tuple[str, ...], fixed: dict) -> list[dict]:
     if not paths:
         return [fixed]
@@ -90,6 +96,20 @@ def group_label(table, paths: tuple[str, ...], values: tuple) -> str:
         if value is not None
     ]
     return ", ".join(parts) or "all"
+
+
+def filter_label(table, fixed: dict) -> str:
+    return ", ".join(f"{display_name(table, path)}={value}" for path, value in fixed.items())
+
+
+def filter_path(fixed: dict) -> str:
+    return (
+        "__".join(
+            f"{sanitize_label(path.rsplit('.', 1)[-1])}={sanitize_label(value)}"
+            for path, value in fixed.items()
+        )
+        or "all"
+    )
 
 
 def cycle_color(index: int):

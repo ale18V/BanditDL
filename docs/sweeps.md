@@ -264,6 +264,13 @@ lines:
 As with heatmaps, multiple entries in `group_by` request multiple grouping
 schemes and therefore multiple figures.
 
+Use `fixed` to restrict a plot. A list generates one independent plot per value:
+
+```yaml
+fixed:
+  sampler.reward: [parameter_distance, cosine_similarity]
+```
+
 ## Single-Run Plots
 
 Enable standard runtime plots for every completed trial:

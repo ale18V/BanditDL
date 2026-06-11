@@ -99,6 +99,42 @@ def test_line_spec_groups_conditional_parameters_into_lines(tmp_path: Path):
     ).exists()
 
 
+def test_fixed_lists_generate_separate_line_plots(tmp_path: Path):
+    rows = [
+        SweepRow({"x": 1, "reward": reward}, {"accuracy__final": value})
+        for reward, value in [("distance", 0.5), ("cosine", 0.7)]
+    ]
+    plotter = SweepPlotter(ExperimentTable(rows), tmp_path)
+
+    plotter.plot_line_spec(
+        {"x": "x", "fixed": {"reward": ["distance", "cosine"]}},
+        ["accuracy"],
+        "final",
+    )
+
+    root = tmp_path / "line" / "direction=final" / "x=x" / "group=all"
+    assert (root / "fixed=reward=distance" / "accuracy.png").exists()
+    assert (root / "fixed=reward=cosine" / "accuracy.png").exists()
+
+
+def test_fixed_lists_generate_separate_heatmaps(tmp_path: Path):
+    rows = [
+        SweepRow({"x": 1, "y": 1, "reward": reward}, {"accuracy__final": value})
+        for reward, value in [("distance", 0.5), ("cosine", 0.7)]
+    ]
+    plotter = SweepPlotter(ExperimentTable(rows), tmp_path)
+
+    plotter.plot_heatmap_spec(
+        {"x": "x", "y": "y", "fixed": {"reward": ["distance", "cosine"]}},
+        ["accuracy"],
+        "final",
+    )
+
+    root = tmp_path / "heatmap" / "direction=final" / "axes=x_y"
+    assert (root / "reward=distance" / "accuracy.png").exists()
+    assert (root / "reward=cosine" / "accuracy.png").exists()
+
+
 def test_final_direction_uses_last_two_percent_with_seed_outer_average():
     values = np.arange(2 * 100 * 3, dtype=float).reshape(2, 100, 3)
 

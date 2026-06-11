@@ -11,6 +11,9 @@ from banditdl.utils.plotting_utils import (
     aggregate,
     cycle_color,
     display_name,
+    expand_fixed,
+    filter_label,
+    filter_path,
     group_filters,
     group_label,
     metric_column,
@@ -47,9 +50,10 @@ class SweepPlotter:
             return
         fixed = dict(spec.get("fixed") or {})
         mode = str(spec.get("aggregate_by", "avg"))
-        for paths in normalize_groups(spec.get("group_by")):
-            for metric in metrics:
-                self._plot_lines(metric, direction, x_path, paths, fixed, mode)
+        for filters in expand_fixed(fixed):
+            for paths in normalize_groups(spec.get("group_by")):
+                for metric in metrics:
+                    self._plot_lines(metric, direction, x_path, paths, filters, mode)
 
     def _plot_lines(
         self,
@@ -82,25 +86,29 @@ class SweepPlotter:
                 color=cycle_color(index),
                 label=group_label(self.table, group_paths, group),
             )
+        title = f"{metric} ({direction})"
+        if fixed:
+            title += f"\nfixed: {filter_label(self.table, fixed)}"
         ax.set(
             xlabel=display_name(self.table, x_path),
             ylabel=f"{metric} ({direction})",
-            title=f"{metric} ({direction})",
+            title=title,
         )
         if group_paths:
             ax.legend(loc="best", fontsize=8)
         ax.grid(True, alpha=0.25)
 
         group = "_".join(display_name(self.table, path) for path in group_paths) or "all"
-        output = (
+        directory = (
             self.output_dir
             / "line"
             / f"direction={direction}"
             / f"x={sanitize_label(display_name(self.table, x_path))}"
             / f"group={sanitize_label(group)}"
-            / f"{metric}.png"
         )
-        save_figure(fig, output)
+        if fixed:
+            directory /= f"fixed={filter_path(fixed)}"
+        save_figure(fig, directory / f"{metric}.png")
 
     # Declarative 2D and 3D heatmaps.
     def plot_heatmap_spec(self, spec: dict, metrics: list[str], direction: str) -> None:
@@ -110,12 +118,13 @@ class SweepPlotter:
         fixed = dict(spec.get("fixed") or {})
         mode = str(spec.get("aggregate_by", "avg"))
         render = normalize_render(spec.get("render"))
-        for paths in normalize_groups(spec.get("group_by")):
-            for filters in group_filters(self.table.rows, paths, fixed):
-                for metric in metrics:
-                    self.plot_heatmap(
-                        metric, direction, x_path, y_path, filters, mode, render
-                    )
+        for fixed_filter in expand_fixed(fixed):
+            for paths in normalize_groups(spec.get("group_by")):
+                for filters in group_filters(self.table.rows, paths, fixed_filter):
+                    for metric in metrics:
+                        self.plot_heatmap(
+                            metric, direction, x_path, y_path, filters, mode, render
+                        )
 
     def plot_heatmap(  # noqa: PLR0913 - preserved public plotting API
         self,
@@ -214,13 +223,7 @@ class SweepPlotter:
             sanitize_label(display_name(self.table, path))
             for path in (data.x_path, data.y_path)
         )
-        group = (
-            "__".join(
-                f"{sanitize_label(key.split('.')[-1])}={sanitize_label(value)}"
-                for key, value in data.fixed.items()
-            )
-            or "all"
-        )
+        group = filter_path(data.fixed)
         return (
             self.output_dir
             / kind

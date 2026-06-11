@@ -124,6 +124,7 @@ Plotting rules:
 - `direction` reduces a metric over timesteps/nodes: `avg` or `worse`.
 - `aggregate_by` reduces extra swept dimensions not used by `x`, `y`, or the active `group_by` slice: `avg`, `min`, or `max`.
 - `group_by` creates slices. A string creates one slice per value; a list creates one slice per value combination.
+- `fixed` filters a plot; list values generate one separate plot per value.
 - In `lines`, each `group_by` combination becomes one line.
 - Heatmap color scales are shared across slices for the same heatmap spec,
   metric, and direction.
