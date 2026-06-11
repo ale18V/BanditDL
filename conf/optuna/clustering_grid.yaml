@@ -6,7 +6,7 @@ plot:
   heatmaps:
     - x: heterogeneity.clusters
       y: topology.sampling
-      group_by:
+      split_by:
         - sampler.name
         - [sampler.name, sampler.reward]
       aggregate_by: avg

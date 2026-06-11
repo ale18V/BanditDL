@@ -149,7 +149,7 @@ plot:
   heatmaps:
     - x: heterogeneity.alpha
       y: topology.sampling
-      group_by:
+      split_by:
         - sampler.name
         - [sampler.name, sampler.params.epsilon]
       aggregate_by: avg
@@ -186,17 +186,17 @@ Each heatmap spec defines:
 - `x`: x-axis parameter
 - `y`: y-axis parameter
 - `metrics`: metrics to include; defaults to all known metrics
-- `group_by`: how to split into multiple slices
+- `split_by`: how to split into multiple figures
 - `aggregate_by`: how to collapse unused sweep dimensions
 - `render`: output kinds
 - `exclude_metrics`: metrics to skip for that spec
 
-### `group_by`
+### `split_by`
 
 Examples:
 
 ```yaml
-group_by:
+split_by:
   - sampler.name
   - [sampler.name, sampler.params.epsilon]
 ```
@@ -208,7 +208,8 @@ Meaning:
 
 ### `aggregate_by`
 
-When the sweep has more parameters than `x`, `y`, and the active `group_by`, the remaining dimensions are collapsed using:
+When the sweep has more parameters than the axes, line groups, and active
+figure split, the remaining dimensions are collapsed using:
 
 - `avg`
 - `min`
@@ -261,15 +262,15 @@ lines:
 - Missing conditional values are retained. For example, CUCB is labelled
   `sampler=cucb`, while discounted CUCB includes its discount.
 
-As with heatmaps, multiple entries in `group_by` request multiple grouping
-schemes and therefore multiple figures.
-
-Use `fixed` to restrict a plot. A list generates one independent plot per value:
+Use `split_by` to generate one independent plot per observed parameter value:
 
 ```yaml
-fixed:
-  sampler.reward: [parameter_distance, cosine_similarity]
+split_by:
+  - sampler.reward
 ```
+
+Rows where a conditional split parameter does not apply are included in every
+figure. This keeps baselines such as `uniform` in reward-specific comparisons.
 
 Heatmap axes can combine conditional parameters:
 

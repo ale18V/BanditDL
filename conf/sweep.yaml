@@ -19,7 +19,7 @@ plot:
   heatmaps:
     - x: heterogeneity.alpha
       y: topology.sampling
-      group_by:
+      split_by:
         - sampler.name
         - [sampler.name, sampler.params.epsilon]
       aggregate_by: avg

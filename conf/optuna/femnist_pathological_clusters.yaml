@@ -11,7 +11,7 @@ plot:
       exclude_metrics: []
     - x: sweep.partition_profile
       y: sampler.reward
-      group_by:
+      split_by:
         - sampler.name
       aggregate_by: avg
       render: [heatmap]

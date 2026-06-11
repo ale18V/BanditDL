@@ -15,11 +15,8 @@ from banditdl.utils.plotting_utils import (
     axis_value,
     cycle_color,
     display_name,
-    expand_fixed,
-    filter_label,
-    filter_path,
-    group_filters,
     group_label,
+    matches_split,
     metric_column,
     normalize_axis,
     normalize_groups,
@@ -27,6 +24,9 @@ from banditdl.utils.plotting_utils import (
     sanitize_label,
     save_figure,
     sort_key,
+    split_filters,
+    split_label,
+    split_path,
 )
 
 
@@ -39,7 +39,7 @@ class _Heatmap:
     y_paths: tuple[str, ...]
     x_values: list
     y_values: list
-    fixed: dict
+    split: dict
     aggregate_by: str
 
 
@@ -53,12 +53,12 @@ class SweepPlotter:
     def plot_line_spec(self, spec: dict, metrics: list[str], direction: str) -> None:
         if not (x_path := spec.get("x")):
             return
-        fixed = dict(spec.get("fixed") or {})
         mode = str(spec.get("aggregate_by", "avg"))
-        for filters in expand_fixed(fixed):
-            for paths in normalize_groups(spec.get("group_by")):
-                for metric in metrics:
-                    self._plot_lines(metric, direction, x_path, paths, filters, mode)
+        for split_paths in normalize_groups(spec.get("split_by")):
+            for split in split_filters(self.table.rows, split_paths):
+                for paths in normalize_groups(spec.get("group_by")):
+                    for metric in metrics:
+                        self._plot_lines(metric, direction, x_path, paths, split, mode)
 
     def _plot_lines(
         self,
@@ -66,12 +66,14 @@ class SweepPlotter:
         direction: str,
         x_path: str,
         group_paths: tuple[str, ...],
-        fixed: dict,
+        split: dict,
         mode: str,
     ) -> None:
         column = metric_column(metric, direction)
         curves: dict[tuple, dict[object, list[float]]] = {}
-        for row in self.table.filter(fixed).rows:
+        for row in self.table.rows:
+            if not matches_split(row.params, split):
+                continue
             if x_path not in row.params or column not in row.metrics:
                 continue
             group = tuple(row.params.get(path) for path in group_paths)
@@ -92,8 +94,8 @@ class SweepPlotter:
                 label=group_label(self.table, group_paths, group),
             )
         title = f"{metric} ({direction})"
-        if fixed:
-            title += f"\nfixed: {filter_label(self.table, fixed)}"
+        if split:
+            title += f"\n{split_label(self.table, split)}"
         ax.set(
             xlabel=display_name(self.table, x_path),
             ylabel=f"{metric} ({direction})",
@@ -111,8 +113,8 @@ class SweepPlotter:
             / f"x={sanitize_label(display_name(self.table, x_path))}"
             / f"group={sanitize_label(group)}"
         )
-        if fixed:
-            directory /= f"fixed={filter_path(fixed)}"
+        if split:
+            directory /= f"split={split_path(split)}"
         save_figure(fig, directory / f"{metric}.png")
 
     # Declarative 2D and 3D heatmaps.
@@ -120,16 +122,14 @@ class SweepPlotter:
         if not spec.get("x") or not spec.get("y"):
             return
         x_paths, y_paths = normalize_axis(spec["x"]), normalize_axis(spec["y"])
-        fixed = dict(spec.get("fixed") or {})
         mode = str(spec.get("aggregate_by", "avg"))
         render = normalize_render(spec.get("render"))
-        for fixed_filter in expand_fixed(fixed):
-            for paths in normalize_groups(spec.get("group_by")):
-                for filters in group_filters(self.table.rows, paths, fixed_filter):
-                    for metric in metrics:
-                        self.plot_heatmap(
-                            metric, direction, x_paths, y_paths, filters, mode, render
-                        )
+        for paths in normalize_groups(spec.get("split_by")):
+            for split in split_filters(self.table.rows, paths):
+                for metric in metrics:
+                    self.plot_heatmap(
+                        metric, direction, x_paths, y_paths, split, mode, render
+                    )
 
     def plot_heatmap(  # noqa: PLR0913 - preserved public plotting API
         self,
@@ -137,15 +137,15 @@ class SweepPlotter:
         direction: str,
         x_path: str | tuple[str, ...],
         y_path: str | tuple[str, ...],
-        fixed_params: dict | None = None,
+        split: dict | None = None,
         aggregate_by: str = "avg",
         render: list[str] | None = None,
     ) -> None:
-        fixed = fixed_params or {}
+        split = split or {}
         x_paths = (x_path,) if isinstance(x_path, str) else x_path
         y_paths = (y_path,) if isinstance(y_path, str) else y_path
         column = metric_column(metric, direction)
-        rows = self.table.filter(fixed).rows
+        rows = [row for row in self.table.rows if matches_split(row.params, split)]
         xs = sorted({axis_value(row.params, x_paths) for row in rows}, key=sort_key)
         ys = sorted({axis_value(row.params, y_paths) for row in rows}, key=sort_key)
         matrix = np.full((len(ys), len(xs)), np.nan)
@@ -164,7 +164,7 @@ class SweepPlotter:
             return
 
         data = _Heatmap(
-            matrix, metric, direction, x_paths, y_paths, xs, ys, fixed, aggregate_by
+            matrix, metric, direction, x_paths, y_paths, xs, ys, split, aggregate_by
         )
         for kind in render or ["heatmap"]:
             if kind == "heatmap":
@@ -217,17 +217,13 @@ class SweepPlotter:
         ax.set_xlabel(axis_name(self.table, data.x_paths))
         ax.set_ylabel(axis_name(self.table, data.y_paths))
         details = [f"extra dims={data.aggregate_by}"]
-        if data.fixed:
-            details.append(
-                ", ".join(
-                    f"{key.split('.')[-1]}={value}" for key, value in data.fixed.items()
-                )
-            )
+        if data.split:
+            details.append(split_label(self.table, data.split))
         ax.set_title(f"{data.metric} ({data.direction})\n{'; '.join(details)}")
 
     def _heatmap_path(self, kind: str, data: _Heatmap) -> Path:
         axes = f"{axis_path(self.table, data.x_paths)}_{axis_path(self.table, data.y_paths)}"
-        group = filter_path(data.fixed)
+        group = split_path(data.split)
         return (
             self.output_dir
             / kind

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from itertools import product
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -92,28 +91,22 @@ def axis_path(table, paths: tuple[str, ...]) -> str:
     return "_".join(sanitize_label(display_name(table, path)) for path in paths)
 
 
-def expand_fixed(fixed: dict) -> list[dict]:
-    keys = list(fixed)
-    values = [value if isinstance(value, list) else [value] for value in fixed.values()]
-    return [dict(zip(keys, combination, strict=True)) for combination in product(*values)]
-
-
-def group_filters(rows, paths: tuple[str, ...], fixed: dict) -> list[dict]:
+def split_filters(rows, paths: tuple[str, ...]) -> list[dict]:
     if not paths:
-        return [fixed]
-    values = [
-        sorted(
-            {
-                row.params[path]
-                for row in rows
-                if path in row.params
-                and all(row.params.get(key) == value for key, value in fixed.items())
-            },
-            key=sort_key,
-        )
-        for path in paths
+        return [{}]
+    combinations = {
+        tuple(row.params.get(path) for path in paths)
+        for row in rows
+        if any(path in row.params for path in paths)
+    }
+    return [
+        {path: value for path, value in zip(paths, values, strict=True) if value is not None}
+        for values in sorted(combinations, key=lambda values: tuple(map(sort_key, values)))
     ]
-    return [{**fixed, **dict(zip(paths, items, strict=True))} for items in product(*values)]
+
+
+def matches_split(params: dict, split: dict) -> bool:
+    return all(path not in params or params[path] == value for path, value in split.items())
 
 
 def group_label(table, paths: tuple[str, ...], values: tuple) -> str:
@@ -125,15 +118,15 @@ def group_label(table, paths: tuple[str, ...], values: tuple) -> str:
     return ", ".join(parts) or "all"
 
 
-def filter_label(table, fixed: dict) -> str:
-    return ", ".join(f"{display_name(table, path)}={value}" for path, value in fixed.items())
+def split_label(table, split: dict) -> str:
+    return ", ".join(f"{display_name(table, path)}={value}" for path, value in split.items())
 
 
-def filter_path(fixed: dict) -> str:
+def split_path(split: dict) -> str:
     return (
         "__".join(
             f"{sanitize_label(path.rsplit('.', 1)[-1])}={sanitize_label(value)}"
-            for path, value in fixed.items()
+            for path, value in split.items()
         )
         or "all"
     )

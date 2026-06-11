@@ -13,6 +13,7 @@ from banditdl.utils.plot_sweep_base import (
     normalize_direction,
     optuna_storage_url,
 )
+from banditdl.utils.plotting_utils import matches_split
 from banditdl.utils.sweep_plotting import SweepPlotter
 
 
@@ -39,7 +40,7 @@ def test_heatmap_spec_groups_and_aggregates_free_dimensions(tmp_path: Path):
     plotter = SweepPlotter(ExperimentTable(rows), tmp_path)
 
     plotter.plot_heatmap_spec(
-        {"x": "x", "y": "y", "group_by": ["g"], "aggregate_by": "avg"},
+        {"x": "x", "y": "y", "split_by": ["g"], "aggregate_by": "avg"},
         ["metric"],
         "avg",
     )
@@ -129,7 +130,7 @@ def test_line_spec_groups_conditional_parameters_into_lines(tmp_path: Path):
     ).exists()
 
 
-def test_fixed_lists_generate_separate_line_plots(tmp_path: Path):
+def test_split_by_generates_separate_line_plots(tmp_path: Path):
     rows = [
         SweepRow({"x": 1, "reward": reward}, {"accuracy__final": value})
         for reward, value in [("distance", 0.5), ("cosine", 0.7)]
@@ -137,17 +138,23 @@ def test_fixed_lists_generate_separate_line_plots(tmp_path: Path):
     plotter = SweepPlotter(ExperimentTable(rows), tmp_path)
 
     plotter.plot_line_spec(
-        {"x": "x", "fixed": {"reward": ["distance", "cosine"]}},
+        {"x": "x", "split_by": "reward"},
         ["accuracy"],
         "final",
     )
 
     root = tmp_path / "line" / "direction=final" / "x=x" / "group=all"
-    assert (root / "fixed=reward=distance" / "accuracy.png").exists()
-    assert (root / "fixed=reward=cosine" / "accuracy.png").exists()
+    assert (root / "split=reward=distance" / "accuracy.png").exists()
+    assert (root / "split=reward=cosine" / "accuracy.png").exists()
 
 
-def test_fixed_lists_generate_separate_heatmaps(tmp_path: Path):
+def test_missing_conditional_parameter_matches_every_split():
+    assert matches_split({"sampler": "uniform"}, {"reward": "distance"})
+    assert matches_split({"reward": "distance"}, {"reward": "distance"})
+    assert not matches_split({"reward": "cosine"}, {"reward": "distance"})
+
+
+def test_split_by_generates_separate_heatmaps(tmp_path: Path):
     rows = [
         SweepRow({"x": 1, "y": 1, "reward": reward}, {"accuracy__final": value})
         for reward, value in [("distance", 0.5), ("cosine", 0.7)]
@@ -155,7 +162,7 @@ def test_fixed_lists_generate_separate_heatmaps(tmp_path: Path):
     plotter = SweepPlotter(ExperimentTable(rows), tmp_path)
 
     plotter.plot_heatmap_spec(
-        {"x": "x", "y": "y", "fixed": {"reward": ["distance", "cosine"]}},
+        {"x": "x", "y": "y", "split_by": "reward"},
         ["accuracy"],
         "final",
     )

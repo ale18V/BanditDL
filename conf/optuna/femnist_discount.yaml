@@ -6,7 +6,7 @@ plot:
   heatmaps:
     - x: sampler.params.discount
       y: topology.sampling
-      group_by:
+      split_by:
         - sampler.reward
       aggregate_by: avg
       render: [heatmap]

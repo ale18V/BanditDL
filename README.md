@@ -98,7 +98,7 @@ plot:
   heatmaps:
     - x: heterogeneity.alpha
       y: topology.sampling
-      group_by:
+      split_by:
         - sampler.name
         - [sampler.name, sampler.params.epsilon]
       aggregate_by: avg
@@ -122,10 +122,9 @@ Plotting rules:
 - Each plot's `metrics` selects metrics; omitting it selects all known metrics.
 - `exclude_metrics` is subtracted from that plot's selected metrics.
 - `direction` reduces a metric over timesteps/nodes: `avg` or `worse`.
-- `aggregate_by` reduces extra swept dimensions not used by `x`, `y`, or the active `group_by` slice: `avg`, `min`, or `max`.
-- `group_by` creates slices. A string creates one slice per value; a list creates one slice per value combination.
+- `aggregate_by` reduces dimensions not used by axes, line groups, or figure splits.
+- `split_by` creates separate figures for each observed value or value combination.
 - Heatmap `x` and `y` accept a list of conditional parameters as one composite axis.
-- `fixed` filters a plot; list values generate one separate plot per value.
 - In `lines`, each `group_by` combination becomes one line.
 - Heatmap color scales are shared across slices for the same heatmap spec,
   metric, and direction.
