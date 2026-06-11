@@ -214,6 +214,9 @@ Meaning:
 
 - a string creates one slice per value
 - a list creates one slice per value combination
+- omitting `split_by` splits by the Cartesian combinations of every unused
+  swept parameter
+- `split_by: []` disables splitting and aggregates unused dimensions
 
 ### `aggregate_by`
 
@@ -232,6 +235,8 @@ Supported values:
 - `heatmap3d`
 
 `heatmap3d` is experimental.
+
+Every 2D heatmap also writes a `.tex` table beside its `.png` file.
 
 ### `metrics` and `exclude_metrics`
 

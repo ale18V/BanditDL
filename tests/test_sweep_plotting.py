@@ -29,7 +29,9 @@ def test_heatmap_renders_file(tmp_path: Path):
 
     plotter.plot_heatmap("metric", "avg", "x", "y", {"g": "a"})
 
-    assert (tmp_path / "heatmap" / "direction=avg" / "axes=x_y" / "g=a" / "metric.png").exists()
+    root = tmp_path / "heatmap" / "direction=avg" / "axes=x_y" / "g=a"
+    assert (root / "metric.png").exists()
+    assert r"\begin{tabular}" in (root / "metric.tex").read_text()
 
 
 def test_heatmap_spec_groups_and_aggregates_free_dimensions(tmp_path: Path):
@@ -184,6 +186,43 @@ def test_split_by_generates_separate_heatmaps(tmp_path: Path):
     root = tmp_path / "heatmap" / "direction=final" / "axes=x_y"
     assert (root / "reward=distance" / "accuracy.png").exists()
     assert (root / "reward=cosine" / "accuracy.png").exists()
+
+
+def test_missing_split_by_uses_all_unused_dimensions(tmp_path: Path):
+    table = ExperimentTable(
+        [
+            SweepRow(
+                {"x": 1, "y": 1, "reward": reward, "sampling": sampling},
+                {"m__avg": 1},
+            )
+            for reward, sampling in [("distance", 0.1), ("cosine", 0.2)]
+        ]
+    )
+    plotter = SweepPlotter(table, tmp_path)
+
+    plotter.plot_heatmap_spec({"x": "x", "y": "y"}, ["m"], "avg")
+
+    root = tmp_path / "heatmap" / "direction=avg" / "axes=x_y"
+    assert (root / "reward=distance__sampling=0_1" / "m.png").exists()
+    assert (root / "reward=cosine__sampling=0_2" / "m.png").exists()
+
+
+def test_empty_split_by_aggregates_unused_dimensions(tmp_path: Path):
+    rows = [
+        SweepRow({"x": 1, "y": 1, "reward": reward}, {"m__avg": value})
+        for reward, value in [("distance", 1), ("cosine", 3)]
+    ]
+    plotter = SweepPlotter(ExperimentTable(rows), tmp_path)
+
+    plotter.plot_heatmap_spec(
+        {"x": "x", "y": "y", "split_by": [], "aggregate_by": "avg"},
+        ["m"],
+        "avg",
+    )
+
+    assert (
+        tmp_path / "heatmap" / "direction=avg" / "axes=x_y" / "all" / "m.png"
+    ).exists()
 
 
 def test_final_direction_uses_last_two_percent_with_seed_outer_average():

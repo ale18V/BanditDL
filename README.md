@@ -120,12 +120,15 @@ Plotting rules:
 - `direction` reduces a metric over timesteps/nodes: `avg` or `worse`.
 - `aggregate_by` reduces dimensions not used by axes, line groups, or figure splits.
 - `split_by` creates separate figures for each observed value or value combination.
+- If omitted, `split_by` defaults to every swept dimension unused by the plot.
+- Use `split_by: []` to aggregate all unused dimensions into one figure.
 - Heatmap `x` and `y` accept a list of conditional parameters as one composite axis.
 - In `lines`, each `group_by` combination becomes one line.
 - Heatmap color scales are shared across slices for the same heatmap spec,
   metric, and direction.
 - `render` defaults to `[heatmap]`; add `heatmap3d` for experimental static
   3D surfaces under `sweep_artifacts/heatmap3d/`.
+- Every 2D heatmap also writes a matching LaTeX table beside the PNG.
 
 Offline plotting can regenerate sweep plots without rerunning training:
 

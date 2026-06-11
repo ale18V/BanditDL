@@ -49,6 +49,16 @@ def normalize_groups(raw) -> list[tuple[str, ...]]:
     return normalized or [()]
 
 
+def split_schemes(table, spec: dict, used_paths: tuple[str, ...]) -> list[tuple[str, ...]]:
+    if "split_by" in spec:
+        return normalize_groups(spec["split_by"])
+    axes = getattr(table, "axes_meta", [])
+    paths = tuple(axis.path for axis in axes if axis.path not in used_paths)
+    if not axes:
+        paths = tuple(path for path in table.param_keys if path not in used_paths)
+    return [paths]
+
+
 def normalize_render(raw) -> list[str]:
     values = raw if isinstance(raw, list) else [raw or "heatmap"]
     render = list(dict.fromkeys(map(str, values)))
@@ -154,3 +164,17 @@ def save_figure(fig, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=160, bbox_inches="tight")
     plt.close(fig)
+
+
+def latex_escape(value) -> str:
+    replacements = {
+        "\\": r"\textbackslash{}",
+        "&": r"\&",
+        "%": r"\%",
+        "$": r"\$",
+        "#": r"\#",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+    }
+    return "".join(replacements.get(char, char) for char in axis_label(value))

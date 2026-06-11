@@ -16,6 +16,7 @@ from banditdl.utils.plotting_utils import (
     cycle_color,
     display_name,
     group_label,
+    latex_escape,
     matches_axis,
     matches_split,
     metric_column,
@@ -28,6 +29,7 @@ from banditdl.utils.plotting_utils import (
     split_filters,
     split_label,
     split_path,
+    split_schemes,
 )
 
 
@@ -55,9 +57,10 @@ class SweepPlotter:
         if not (x_path := spec.get("x")):
             return
         mode = str(spec.get("aggregate_by", "avg"))
-        for split_paths in normalize_groups(spec.get("split_by")):
-            for split in split_filters(self.table.rows, split_paths):
-                for paths in normalize_groups(spec.get("group_by")):
+        for paths in normalize_groups(spec.get("group_by")):
+            used = (x_path, *paths)
+            for split_paths in split_schemes(self.table, spec, used):
+                for split in split_filters(self.table.rows, split_paths):
                     for metric in metrics:
                         self._plot_lines(metric, direction, x_path, paths, split, mode)
 
@@ -125,7 +128,7 @@ class SweepPlotter:
         x_paths, y_paths = normalize_axis(spec["x"]), normalize_axis(spec["y"])
         mode = str(spec.get("aggregate_by", "avg"))
         render = normalize_render(spec.get("render"))
-        for paths in normalize_groups(spec.get("split_by")):
+        for paths in split_schemes(self.table, spec, (*x_paths, *y_paths)):
             for split in split_filters(self.table.rows, paths):
                 for metric in metrics:
                     self.plot_heatmap(
@@ -190,7 +193,41 @@ class SweepPlotter:
                 va="center",
                 fontsize=8,
             )
-        save_figure(fig, self._heatmap_path("heatmap", data))
+        output = self._heatmap_path("heatmap", data)
+        save_figure(fig, output)
+        self._save_latex_table(data, output.with_suffix(".tex"))
+
+    def _save_latex_table(self, data: _Heatmap, output: Path) -> None:
+        columns = "l" + "r" * len(data.x_values)
+        header = " & ".join(["", *(latex_escape(value) for value in data.x_values)])
+        rows = [
+            " & ".join(
+                [
+                    latex_escape(y_value),
+                    *("--" if np.isnan(value) else f"{value:.6g}" for value in values),
+                ]
+            )
+            + r" \\"
+            for y_value, values in zip(data.y_values, data.values, strict=True)
+        ]
+        caption = latex_escape(f"{data.metric} ({data.direction})")
+        content = "\n".join(
+            [
+                r"\begin{table}[ht]",
+                r"\centering",
+                rf"\caption{{{caption}}}",
+                rf"\begin{{tabular}}{{{columns}}}",
+                r"\hline",
+                header + r" \\",
+                r"\hline",
+                *rows,
+                r"\hline",
+                r"\end{tabular}",
+                r"\end{table}",
+                "",
+            ]
+        )
+        output.write_text(content)
 
     def _save_heatmap3d(self, data: _Heatmap) -> None:
         x_grid, y_grid = np.meshgrid(
