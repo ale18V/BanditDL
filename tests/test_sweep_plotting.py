@@ -64,6 +64,36 @@ def test_heatmap_spec_writes_3d_plot(tmp_path: Path):
     assert (tmp_path / "heatmap3d" / "direction=avg" / "axes=x_y" / "all" / "metric.png").exists()
 
 
+def test_heatmap_supports_composite_conditional_axes(tmp_path: Path):
+    rows = [
+        SweepRow({"sampler": "cucb", "sampling": 0.1}, {"accuracy__final": 0.5}),
+        SweepRow(
+            {"sampler": "discounted_cucb", "discount": 0.9, "sampling": 0.1},
+            {"accuracy__final": 0.7},
+        ),
+        SweepRow(
+            {"sampler": "discounted_cucb", "discount": 0.95, "sampling": 0.1},
+            {"accuracy__final": 0.8},
+        ),
+    ]
+    plotter = SweepPlotter(ExperimentTable(rows), tmp_path)
+
+    plotter.plot_heatmap_spec(
+        {"x": ["sampler", "discount"], "y": "sampling"},
+        ["accuracy"],
+        "final",
+    )
+
+    assert (
+        tmp_path
+        / "heatmap"
+        / "direction=final"
+        / "axes=sampler_discount_sampling"
+        / "all"
+        / "accuracy.png"
+    ).exists()
+
+
 def test_line_spec_groups_conditional_parameters_into_lines(tmp_path: Path):
     rows = [
         SweepRow({"sampling": 0.1, "sampler": "cucb"}, {"accuracy__final": 0.5}),

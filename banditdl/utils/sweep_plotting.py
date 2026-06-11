@@ -9,6 +9,10 @@ import numpy as np
 from banditdl.utils.experiment_table import ExperimentTable
 from banditdl.utils.plotting_utils import (
     aggregate,
+    axis_label,
+    axis_name,
+    axis_path,
+    axis_value,
     cycle_color,
     display_name,
     expand_fixed,
@@ -17,6 +21,7 @@ from banditdl.utils.plotting_utils import (
     group_filters,
     group_label,
     metric_column,
+    normalize_axis,
     normalize_groups,
     normalize_render,
     sanitize_label,
@@ -30,8 +35,8 @@ class _Heatmap:
     values: np.ndarray
     metric: str
     direction: str
-    x_path: str
-    y_path: str
+    x_paths: tuple[str, ...]
+    y_paths: tuple[str, ...]
     x_values: list
     y_values: list
     fixed: dict
@@ -112,9 +117,9 @@ class SweepPlotter:
 
     # Declarative 2D and 3D heatmaps.
     def plot_heatmap_spec(self, spec: dict, metrics: list[str], direction: str) -> None:
-        x_path, y_path = spec.get("x"), spec.get("y")
-        if not x_path or not y_path:
+        if not spec.get("x") or not spec.get("y"):
             return
+        x_paths, y_paths = normalize_axis(spec["x"]), normalize_axis(spec["y"])
         fixed = dict(spec.get("fixed") or {})
         mode = str(spec.get("aggregate_by", "avg"))
         render = normalize_render(spec.get("render"))
@@ -123,32 +128,34 @@ class SweepPlotter:
                 for filters in group_filters(self.table.rows, paths, fixed_filter):
                     for metric in metrics:
                         self.plot_heatmap(
-                            metric, direction, x_path, y_path, filters, mode, render
+                            metric, direction, x_paths, y_paths, filters, mode, render
                         )
 
     def plot_heatmap(  # noqa: PLR0913 - preserved public plotting API
         self,
         metric: str,
         direction: str,
-        x_path: str,
-        y_path: str,
+        x_path: str | tuple[str, ...],
+        y_path: str | tuple[str, ...],
         fixed_params: dict | None = None,
         aggregate_by: str = "avg",
         render: list[str] | None = None,
     ) -> None:
         fixed = fixed_params or {}
-        xs = self.table.get_unique_values(x_path)
-        ys = self.table.get_unique_values(y_path)
+        x_paths = (x_path,) if isinstance(x_path, str) else x_path
+        y_paths = (y_path,) if isinstance(y_path, str) else y_path
         column = metric_column(metric, direction)
-        matrix = np.full((len(ys), len(xs)), np.nan)
         rows = self.table.filter(fixed).rows
+        xs = sorted({axis_value(row.params, x_paths) for row in rows}, key=sort_key)
+        ys = sorted({axis_value(row.params, y_paths) for row in rows}, key=sort_key)
+        matrix = np.full((len(ys), len(xs)), np.nan)
         for y_index, y_value in enumerate(ys):
             for x_index, x_value in enumerate(xs):
                 values = [
                     row.metrics[column]
                     for row in rows
-                    if row.params.get(x_path) == x_value
-                    and row.params.get(y_path) == y_value
+                    if axis_value(row.params, x_paths) == x_value
+                    and axis_value(row.params, y_paths) == y_value
                     and column in row.metrics
                 ]
                 if values:
@@ -157,7 +164,7 @@ class SweepPlotter:
             return
 
         data = _Heatmap(
-            matrix, metric, direction, x_path, y_path, xs, ys, fixed, aggregate_by
+            matrix, metric, direction, x_paths, y_paths, xs, ys, fixed, aggregate_by
         )
         for kind in render or ["heatmap"]:
             if kind == "heatmap":
@@ -200,15 +207,15 @@ class SweepPlotter:
 
     def _format_heatmap_axes(self, ax, data: _Heatmap, is_3d: bool = False) -> None:
         ax.set_xticks(range(len(data.x_values)))
-        labels = [str(value) for value in data.x_values]
+        labels = [axis_label(value) for value in data.x_values]
         if is_3d:
             ax.set_xticklabels(labels, rotation=35, ha="right")
         else:
             ax.set_xticklabels(labels, rotation=45)
         ax.set_yticks(range(len(data.y_values)))
-        ax.set_yticklabels([str(value) for value in data.y_values])
-        ax.set_xlabel(display_name(self.table, data.x_path))
-        ax.set_ylabel(display_name(self.table, data.y_path))
+        ax.set_yticklabels([axis_label(value) for value in data.y_values])
+        ax.set_xlabel(axis_name(self.table, data.x_paths))
+        ax.set_ylabel(axis_name(self.table, data.y_paths))
         details = [f"extra dims={data.aggregate_by}"]
         if data.fixed:
             details.append(
@@ -219,10 +226,7 @@ class SweepPlotter:
         ax.set_title(f"{data.metric} ({data.direction})\n{'; '.join(details)}")
 
     def _heatmap_path(self, kind: str, data: _Heatmap) -> Path:
-        axes = "_".join(
-            sanitize_label(display_name(self.table, path))
-            for path in (data.x_path, data.y_path)
-        )
+        axes = f"{axis_path(self.table, data.x_paths)}_{axis_path(self.table, data.y_paths)}"
         group = filter_path(data.fixed)
         return (
             self.output_dir

@@ -65,6 +65,33 @@ def display_name(table, path: str) -> str:
     return path.rsplit(".", 1)[-1]
 
 
+def normalize_axis(raw) -> tuple[str, ...]:
+    if isinstance(raw, str):
+        return (raw,)
+    if isinstance(raw, list) and raw:
+        return tuple(map(str, raw))
+    raise ValueError(f"plot axis must be a parameter path or non-empty list: {raw!r}")
+
+
+def axis_value(params: dict, paths: tuple[str, ...]):
+    values = tuple(params.get(path) for path in paths)
+    return values[0] if len(values) == 1 else values
+
+
+def axis_label(value) -> str:
+    if not isinstance(value, tuple):
+        return str(value)
+    return "-".join(str(item) for item in value if item is not None)
+
+
+def axis_name(table, paths: tuple[str, ...]) -> str:
+    return " / ".join(display_name(table, path) for path in paths)
+
+
+def axis_path(table, paths: tuple[str, ...]) -> str:
+    return "_".join(sanitize_label(display_name(table, path)) for path in paths)
+
+
 def expand_fixed(fixed: dict) -> list[dict]:
     keys = list(fixed)
     values = [value if isinstance(value, list) else [value] for value in fixed.values()]

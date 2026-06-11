@@ -271,6 +271,15 @@ fixed:
   sampler.reward: [parameter_distance, cosine_similarity]
 ```
 
+Heatmap axes can combine conditional parameters:
+
+```yaml
+x: [sampler.name, sampler.params.discount]
+```
+
+Missing values are omitted from labels, producing categories such as `cucb`,
+`discounted_cucb-0.9`, and `discounted_cucb-0.95`.
+
 ## Single-Run Plots
 
 Enable standard runtime plots for every completed trial:
