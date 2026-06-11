@@ -140,6 +140,15 @@ Use a custom output directory if desired:
 uv run python scripts/plot_sweep.py .hydra_runs/<date>/<time> --output-dir plots/my_sweep
 ```
 
+Use an external plotting configuration without changing the completed sweep:
+
+```bash
+uv run python scripts/plot_sweep.py <sweep-dir> --config plot.yaml
+```
+
+The file must contain a top-level `plot:` section. It is merged over the
+plotting configuration stored in `<sweep-dir>/.hydra/config.yaml`.
+
 Available editable exhaustive profiles:
 
 ```bash

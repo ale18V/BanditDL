@@ -259,6 +259,40 @@ sweep, enable them without editing its stored config:
 uv run python scripts/plot_sweep.py <sweep-dir> --single-runs
 ```
 
+## Offline Plot Configuration
+
+By default, the offline plotter uses `<sweep-dir>/.hydra/config.yaml` and writes
+to `<sweep-dir>/sweep_artifacts/`.
+
+To change plotting without modifying the completed sweep, create a YAML file:
+
+```yaml
+plot:
+  directions: [final]
+  heatmaps:
+    - x: sweep.partition_profile
+      y: sampler.name
+      aggregate_by: avg
+      render: [heatmap]
+      exclude_metrics:
+        - train_loss
+        - gradient_norms
+
+  per_parameter:
+    enabled: false
+```
+
+Then run:
+
+```bash
+uv run python scripts/plot_sweep.py <sweep-dir> \
+  --config plot.yaml \
+  --output-dir <sweep-dir>/sweep_artifacts
+```
+
+Both options are optional. The external `plot:` section is merged over the
+effective plotting configuration stored by Hydra.
+
 ## Practical Recommendations
 
 If you want a small sweep artifact set:
