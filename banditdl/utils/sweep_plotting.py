@@ -12,10 +12,11 @@ from banditdl.utils.plotting_utils import (
     axis_label,
     axis_name,
     axis_path,
-    axis_value,
+    axis_values,
     cycle_color,
     display_name,
     group_label,
+    matches_axis,
     matches_split,
     metric_column,
     normalize_axis,
@@ -146,16 +147,16 @@ class SweepPlotter:
         y_paths = (y_path,) if isinstance(y_path, str) else y_path
         column = metric_column(metric, direction)
         rows = [row for row in self.table.rows if matches_split(row.params, split)]
-        xs = sorted({axis_value(row.params, x_paths) for row in rows}, key=sort_key)
-        ys = sorted({axis_value(row.params, y_paths) for row in rows}, key=sort_key)
+        xs = axis_values(rows, x_paths)
+        ys = axis_values(rows, y_paths)
         matrix = np.full((len(ys), len(xs)), np.nan)
         for y_index, y_value in enumerate(ys):
             for x_index, x_value in enumerate(xs):
                 values = [
                     row.metrics[column]
                     for row in rows
-                    if axis_value(row.params, x_paths) == x_value
-                    and axis_value(row.params, y_paths) == y_value
+                    if matches_axis(row.params, x_paths, x_value)
+                    and matches_axis(row.params, y_paths, y_value)
                     and column in row.metrics
                 ]
                 if values:

@@ -13,7 +13,7 @@ from banditdl.utils.plot_sweep_base import (
     normalize_direction,
     optuna_storage_url,
 )
-from banditdl.utils.plotting_utils import matches_split
+from banditdl.utils.plotting_utils import axis_values, matches_axis, matches_split
 from banditdl.utils.sweep_plotting import SweepPlotter
 
 
@@ -93,6 +93,18 @@ def test_heatmap_supports_composite_conditional_axes(tmp_path: Path):
         / "all"
         / "accuracy.png"
     ).exists()
+
+
+def test_missing_conditional_axis_value_is_reused_without_none_category():
+    rows = [
+        SweepRow({"sampler": "uniform"}, {}),
+        SweepRow({"sampler": "cucb", "reward": "distance"}, {}),
+        SweepRow({"sampler": "cucb", "reward": "cosine"}, {}),
+    ]
+
+    assert axis_values(rows, ("reward",)) == ["cosine", "distance"]
+    assert matches_axis(rows[0].params, ("reward",), "distance")
+    assert matches_axis(rows[0].params, ("reward",), "cosine")
 
 
 def test_line_spec_groups_conditional_parameters_into_lines(tmp_path: Path):

@@ -77,6 +77,19 @@ def axis_value(params: dict, paths: tuple[str, ...]):
     return values[0] if len(values) == 1 else values
 
 
+def axis_values(rows, paths: tuple[str, ...]) -> list:
+    values = {
+        axis_value(row.params, paths)
+        for row in rows
+        if any(path in row.params for path in paths)
+    }
+    return sorted(values, key=sort_key)
+
+
+def matches_axis(params: dict, paths: tuple[str, ...], value) -> bool:
+    return not any(path in params for path in paths) or axis_value(params, paths) == value
+
+
 def axis_label(value) -> str:
     if not isinstance(value, tuple):
         return str(value)
