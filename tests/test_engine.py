@@ -1,5 +1,3 @@
-import json
-
 import numpy as np
 import pytest
 import torch
@@ -37,11 +35,6 @@ class _FakeWorker:
     def compute_train_loss(self):
         self.train_loss_calls += 1
         return float(self.train_loss_calls)
-
-
-class _FakeSampler:
-    def state(self):
-        return {"sampler": "fake", "value": 1.0}
 
 
 class _AllPeersSampler:
@@ -174,19 +167,6 @@ def test_sampler_diagnostics_are_progressively_written(tmp_path):
     assert weights.shape == (2, 3, 4)
     np.testing.assert_allclose(weights[0], 0.25)
     assert np.isnan(weights[1]).all()
-
-
-def test_sampler_states_are_progressively_written(tmp_path):
-    cfg = BanditDLConfig()
-    cfg.topology.nodes = 1
-    cfg.optimization.rounds = 2
-    worker = type("Worker", (), {"worker_id": 0, "neighbor_sampler": _FakeSampler()})()
-
-    with ResultTracker(cfg, tmp_path) as tracker:
-        tracker.record_sampler_states(0, [worker])
-
-    rows = [json.loads(line) for line in (tmp_path / "sampler_states.jsonl").read_text().splitlines()]
-    assert rows == [{"step": 0, "workers": [{"worker_id": 0, "state": {"sampler": "fake", "value": 1.0}}]}]
 
 
 def test_tracker_records_validation_checkpoints_and_roundwise_train_loss(tmp_path):

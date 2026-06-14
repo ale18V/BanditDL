@@ -152,7 +152,6 @@ find "$RUN" -name "global_accuracy.npy" | head
 find "$RUN" -name "global_loss.npy" | head
 find "$RUN" -name "sampler_weights.npy" | head
 find "$RUN" -name "sampler_probabilities.npy" | head
-find "$RUN" -name "sampler_states.jsonl" -o -name "sampler_states_by_seed.jsonl" | head
 ```
 
 Check that sweep artifacts were generated:
@@ -178,7 +177,6 @@ Expected files include:
 - `train_loss.npy`
 - `sampler_weights.npy`
 - `sampler_probabilities.npy`
-- `sampler_states.jsonl` or `sampler_states_by_seed.jsonl`
 - `reward_algorithm.npy`
 - `reward_oracle.npy`
 - `regret.npy`

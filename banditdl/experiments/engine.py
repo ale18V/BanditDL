@@ -249,24 +249,6 @@ class ResultTracker:
         self.mmaps["sampler_weights.npy"][step] = weights
         self.mmaps["sampler_probabilities.npy"][step] = probabilities
 
-    def record_sampler_states(self, step, honest_workers):
-        if step >= self.cfg.effective_rounds:
-            return
-        row = {
-            "step": int(step),
-            "workers": [
-                {
-                    "worker_id": int(w.worker_id),
-                    "state": w.neighbor_sampler.state()
-                    if hasattr(w.neighbor_sampler, "state")
-                    else {"sampler": type(w.neighbor_sampler).__name__},
-                }
-                for w in honest_workers
-            ],
-        }
-        with (self.result_dir / "sampler_states.jsonl").open("a") as fd:
-            fd.write(json.dumps(row, sort_keys=True) + "\n")
-
     def record_rewards(self, alg, ora, sel, ora_n, r_min, r_max):
         self.algorithm_reward_history.append(alg.copy())
         self.oracle_reward_history.append(np.array(ora))
@@ -487,7 +469,6 @@ def _step_dynamic(
         w.aggregate(n_weights)
 
     tracker.record_sampler_diagnostics(step, weight_rows, probability_rows)
-    tracker.record_sampler_states(step, honest_workers)
     ora_n_round, ora_r_round = [], []
     for w in honest_workers:
         oids, oreward = _best_fixed_subset(cum_arm_r[w.worker_id], w.worker_id, w.nb_neighbors)

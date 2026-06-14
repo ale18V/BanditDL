@@ -621,7 +621,6 @@ Dynamic runs also save hindsight diagnostics for every sampler, including unifor
 - `sampler_weights.npy`: normalized sampler preference scores with shape
   `(rounds, honest_workers, total_nodes)`.
 - `sampler_probabilities.npy`: per-round sampler probabilities with shape `(rounds, honest_workers, total_nodes)`.
-- `sampler_states.jsonl`: per-round JSON snapshots of sampler internals
   (`counts`, `reward_sums`, EXP3 weights, CTS posterior stats, etc.).
 - probabilities represent normalized top-k inclusion mass, `P(arm is selected) / k`;
   stochastic samplers estimate it without changing the sampler's training RNG.
