@@ -8,6 +8,7 @@ Scripts:
 | `slurm/sbatch_banditdl_gpu.sh` | **Login node** (via `sbatch`) | Submits one GPU training run (e.g. Izar). Takes Hydra overrides as args. |
 | `slurm/sbatch_banditdl_cpu.sh` | **Login node** (via `sbatch`) | Submits one CPU-only training run (e.g. Jed). Takes Hydra overrides as args. |
 | `slurm/sbatch_banditdl_optuna_gpu.sh` | **Login node** (via `sbatch`) | Submits one GPU Optuna sweep. Takes sweep Hydra overrides as args. |
+| `slurm/cifar-clustering-sweep.sh` | **Login node** (via `sbatch`) | Runs the CIFAR-10 five-cluster sampler/reward comparison. |
 
 The single-run `sbatch_banditdl_gpu.sh` and `sbatch_banditdl_cpu.sh` scripts are
 identical except for the partition/GPU directives and the auto-injected
@@ -114,6 +115,16 @@ hydra.run.dir=/absolute/path/to/the/existing/sweep
 ```
 
 Completed configuration IDs are skipped.
+
+The dedicated CIFAR-10 clustering experiment can be submitted directly:
+
+```bash
+sbatch slurm/cifar-clustering-sweep.sh
+```
+
+It runs 42 independent trials: fourteen sampler/reward configurations across
+three seeds. Forty-two workers share four GPUs, and sweep plots average matching
+configurations across seeds.
 
 ## 4. Output
 

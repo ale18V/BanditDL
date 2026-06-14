@@ -133,6 +133,33 @@ def test_grid_profiles_are_exhaustive_and_valid(profile):
         build_engine_config(_training_config(trial_cfg))
 
 
+def test_cifar_clustering_grid_includes_exp3_and_matches_worker_count():
+    cfg = _compose("cifar_clustering")
+    search_space = OmegaConf.to_container(cfg.optuna.search_space, resolve=True)
+    combos = enumerate_valid_param_dicts(cfg, search_space)
+    trials = len(combos) * 3
+
+    assert {params["sweep.sampler"] for params in combos} == {
+        "uniform",
+        "epsilon_greedy",
+        "exp3",
+        "cucb",
+        "cts",
+        "discounted_cucb",
+        "discounted_cts",
+    }
+    discounted = [
+        params for params in combos if params["sweep.sampler"].startswith("discounted_")
+    ]
+    stationary = [
+        params for params in combos if not params["sweep.sampler"].startswith("discounted_")
+    ]
+    assert {params["sampler.params.discount"] for params in discounted} == {0.9}
+    assert all("sampler.params.discount" not in params for params in stationary)
+    assert trials == 42
+    assert cfg.optuna.workers == trials
+
+
 def test_completed_and_failed_attempts_are_recoverable_from_study():
     study = optuna.create_study(direction="maximize")
     study.add_trial(
