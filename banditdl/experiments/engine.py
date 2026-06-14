@@ -424,6 +424,16 @@ def _dynamic_candidate_deltas(w, honest_deltas, byz_by_id):
     return deltas
 
 
+def _snapshot_weights(workers):
+    return [worker.pull(None).detach().clone() for worker in workers]
+
+
+def _model_deltas(current_weights, previous_weights):
+    for current, previous in zip(current_weights, previous_weights, strict=True):
+        previous.neg_().add_(current)
+    return previous_weights
+
+
 def _full_sampler_diagnostics(worker, nb_total: int) -> tuple[np.ndarray, np.ndarray]:
     population = [i for i in range(nb_total) if i != worker.worker_id]
     diagnostics = worker.neighbor_sampler.diagnostics(population, worker.nb_neighbors)
@@ -580,7 +590,7 @@ def run_experiment(
         for step in range(cfg.effective_rounds + 1):
             tracker.evaluate_step(step, honest_workers)
             if step < cfg.effective_rounds:
-                prev_weights = [w.pull(None).detach().clone() for w in honest_workers]
+                prev_weights = _snapshot_weights(honest_workers)
                 if batched_trainer:
                     batched_trainer.train_workers(honest_workers)
                 else:
@@ -588,9 +598,8 @@ def run_experiment(
                         w.train()
                 tracker.record_train_loss(step, honest_workers)
                 tracker.record_gradient_norms(step, honest_workers)
-                h_weights = [w.pull(None) for w in honest_workers]
-                h_deltas = [current - previous for current, previous in zip(h_weights, prev_weights, strict=True)]
-                del prev_weights
+                h_weights = _snapshot_weights(honest_workers)
+                h_deltas = _model_deltas(h_weights, prev_weights)
 
                 # Inform Byzantines once per round
                 for byz in byz_workers:

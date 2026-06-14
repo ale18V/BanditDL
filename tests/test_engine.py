@@ -10,6 +10,9 @@ from banditdl.experiments.engine import (
     _best_fixed_subset,
     _dynamic_candidate_deltas,
     _mean_selected_reward,
+    _model_deltas,
+    _snapshot_weights,
+    _step_dynamic,
 )
 
 
@@ -41,6 +44,47 @@ class _FakeSampler:
         return {"sampler": "fake", "value": 1.0}
 
 
+class _AllPeersSampler:
+    def sample(self, population, count):
+        return population
+
+    def diagnostics(self, population, count):
+        uniform = {node: 1 / len(population) for node in population}
+        return type("Diagnostics", (), {"weights": uniform, "probabilities": uniform})()
+
+
+class _ZeroReward:
+    def score(self, local, neighbors):
+        return [0.0] * len(neighbors)
+
+
+class _ScalarWorker:
+    def __init__(self, worker_id, value):
+        self.worker_id = worker_id
+        self._weights = torch.tensor([value])
+        self.nb_neighbors = 2
+        self.neighbor_sampler = _AllPeersSampler()
+        self.reward_strategy = _ZeroReward()
+        self.num_selected_byz = []
+
+    def pull(self, context=None):
+        return self._weights
+
+    def _sample_neighbors(self):
+        return [node for node in range(3) if node != self.worker_id]
+
+    def observe_neighbors(self, neighbors, rewards):
+        return None
+
+    def aggregate(self, neighbors):
+        self._weights.copy_(torch.stack([self._weights, *neighbors]).mean(dim=0))
+
+
+class _NoopTracker:
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: None
+
+
 def test_best_fixed_subset_reward_is_cardinality_normalized():
     selected, reward = _best_fixed_subset([0.9, 0.5, 0.8, 0.1], worker_id=0, k=2)
 
@@ -67,6 +111,46 @@ def test_dynamic_candidate_deltas_use_last_model_updates():
     torch.testing.assert_close(candidates[1], deltas[1])
     torch.testing.assert_close(candidates[2], deltas[2])
     torch.testing.assert_close(candidates[3], torch.zeros_like(deltas[0]))
+
+
+def test_full_participation_aggregates_from_one_round_snapshot():
+    workers = [_ScalarWorker(0, 0.0), _ScalarWorker(1, 3.0), _ScalarWorker(2, 6.0)]
+    cfg = type(
+        "Config",
+        (),
+        {
+            "nb_honests": 3,
+            "topology": type("Topology", (), {"nodes": 3})(),
+        },
+    )()
+    weights = _snapshot_weights(workers)
+
+    _step_dynamic(
+        0,
+        cfg,
+        workers,
+        {},
+        weights,
+        [torch.zeros_like(weight) for weight in weights],
+        np.zeros((3, 3)),
+        np.zeros(3),
+        _NoopTracker(),
+    )
+
+    for worker in workers:
+        torch.testing.assert_close(worker.pull(), torch.tensor([3.0]))
+
+
+def test_model_deltas_reuse_previous_weight_buffers():
+    current = [torch.tensor([3.0]), torch.tensor([7.0])]
+    previous = [torch.tensor([1.0]), torch.tensor([4.0])]
+    pointers = [weight.data_ptr() for weight in previous]
+
+    deltas = _model_deltas(current, previous)
+
+    assert [weight.data_ptr() for weight in deltas] == pointers
+    torch.testing.assert_close(deltas[0], torch.tensor([2.0]))
+    torch.testing.assert_close(deltas[1], torch.tensor([3.0]))
 
 
 def test_sampler_diagnostics_are_progressively_written(tmp_path):
