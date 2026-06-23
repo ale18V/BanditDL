@@ -1,6 +1,7 @@
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -51,6 +52,7 @@ class Panel:
     xscale: str = "linear"
     yscale: str = "linear"
     x_offset: float = 0.0
+    hlines: Sequence[tuple[float, str]] = ()
 
 
 def _extract_run_hparams(label: str) -> str | None:
@@ -110,6 +112,8 @@ class StandardPlotter:
                 ax.set_ylim(*panel.ylim)
             ax.set_xscale(panel.xscale)
             ax.set_yscale(panel.yscale)
+            for y, label in panel.hlines:
+                ax.axhline(y, color="black", linestyle=":", linewidth=1.1, label=label)
             if idx == len(panels) - 1:
                 ax.set_xlabel(panel.xlabel)
 
@@ -251,6 +255,45 @@ def _sampler_weight_panels() -> list[Panel]:
     ]
 
 
+def _byzantine_baseline(run_dir: Path) -> float | None:
+    audit_path = Path(run_dir) / "audit.json"
+    if not audit_path.exists():
+        return None
+    participants = json.loads(audit_path.read_text()).get("participants", {})
+    total = int(participants.get("total") or 0)
+    honest = int(participants.get("honest") or total)
+    byzantine = total - honest
+    if total <= 1 or byzantine <= 0:
+        return None
+    return byzantine / (total - 1)
+
+
+def _byzantine_exposure_panels(run_dir: Path) -> list[Panel]:
+    baseline = _byzantine_baseline(run_dir)
+    hlines = () if baseline is None else ((baseline, "uniform exposure"),)
+    return [
+        Panel(
+            "Byzantine Sampler Probability Mass",
+            "Probability mass",
+            _node_series(MetricKey.BYZANTINE_PROBABILITY_MASS),
+            ylim=(0, 1),
+        ),
+        Panel(
+            "Byzantine Sampler Weight Mass",
+            "Normalized weight mass",
+            _node_series(MetricKey.BYZANTINE_WEIGHT_MASS),
+            ylim=(0, 1),
+        ),
+        Panel(
+            "Selected Byzantine Neighbor Fraction",
+            "Fraction",
+            _node_series(MetricKey.BYZANTINE_SELECTION_FRACTION),
+            ylim=(0, 1),
+            hlines=hlines,
+        ),
+    ]
+
+
 def _gradient_norm_loglog_panel() -> Panel:
     return Panel(
         "Gradient Norm Decay",
@@ -357,6 +400,10 @@ def plot_all(run_dir: Path, plots_dir: Path, run_label: str | None = None) -> No
         _sampler_aggressiveness_panels(),
     )
     plotter.plot("sampler_weights.png", _sampler_weight_panels())
+    try:
+        plotter.plot("byzantine_exposure.png", _byzantine_exposure_panels(run_dir))
+    except FileNotFoundError:
+        pass
 
     plotter.plot(
         "reward.png",
@@ -417,9 +464,6 @@ def plot_all(run_dir: Path, plots_dir: Path, run_label: str | None = None) -> No
                 run_dir,
                 Path(plots_dir) / f"clustering_{weight_source}.png",
                 weight_source=weight_source,
-                relative_threshold=1.0
-                if weight_source.startswith("sampler_")
-                else None,
             )
         except FileNotFoundError:
             pass

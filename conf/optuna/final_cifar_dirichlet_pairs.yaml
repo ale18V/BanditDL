@@ -1,0 +1,73 @@
+name: final-cifar-dirichlet-pairs
+direction: maximize
+workers: 44
+seeds: [0, 1, 2]
+
+plot:
+  directions: [final]
+  heatmaps:
+    - x: heterogeneity.alpha
+      y: sampler.name
+      split_by:
+        - sampler.reward
+      aggregate_by: avg
+      render: [heatmap]
+      metrics: [validation_accuracy, global_accuracy]
+      exclude_metrics: []
+  lines: []
+
+search_space:
+  heterogeneity.clusters:
+    name: clusters
+    type: categorical
+    choices: [15]
+  topology.sampling:
+    name: sampling
+    type: categorical
+    choices: [0.2]
+  heterogeneity.alpha:
+    name: alpha
+    type: categorical
+    choices: [0.1, 0.3, 0.5, 1.0, 10.0]
+  sweep.sampler:
+    name: sampler
+    type: tuple
+    choices:
+      - label: uniform
+        params:
+          sampler.name: uniform
+      - label: epsilon_greedy
+        params:
+          sampler.name: epsilon_greedy
+          sampler.params.epsilon: 0.1
+          sampler.params.initial_value: 0.0
+      - label: exp3
+        params:
+          sampler.name: exp3
+          sampler.params.gamma: auto
+          sampler.params.lower: 0.0
+          sampler.params.amplitude: 1.0
+      - label: cucb
+        params:
+          sampler.name: cucb
+          sampler.params.exploration: 1.0
+      - label: cts
+        params:
+          sampler.name: cts
+      - label: discounted_cucb
+        params:
+          sampler.name: discounted_cucb
+          sampler.params.exploration: 1.0
+      - label: discounted_cts
+        params:
+          sampler.name: discounted_cts
+  sampler.reward:
+    name: reward
+    type: categorical
+    choices: [parameter_distance, update_cosine_similarity]
+  sampler.params.discount:
+    name: discount
+    type: categorical
+    choices: [0.9, 0.95, 0.99]
+    when:
+      sampler.name: [discounted_cucb, discounted_cts]

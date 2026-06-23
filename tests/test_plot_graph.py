@@ -13,14 +13,38 @@ import numpy as np
 
 matplotlib.use("Agg")  # headless backend for CI
 
-from banditdl.utils.plot_graph import (  # noqa: E402
+from banditdl.utils.plot_graph import (
     _filter_edges,
     _load_weights,
+    _worker_groups,
     mutual_collaboration,
     plot_clustering_graph,
     plot_collaboration_embedding,
     spectral_embedding,
 )
+
+
+def test_worker_groups_loads_dirichlet_clusters_from_audit(tmp_path):
+    results = tmp_path / "results"
+    results.mkdir()
+    (results / "audit.json").write_text(
+        '{"partition": {"method": "dirichlet", "resolved_clusters": 3}}'
+    )
+
+    groups = _worker_groups(results, None, 6)
+
+    np.testing.assert_array_equal(groups, [0, 0, 1, 1, 2, 2])
+
+
+def test_worker_groups_loads_seed_averaged_audit(tmp_path):
+    results = tmp_path / "results"
+    audit = results / "seeds" / "seed_1" / "results" / "audit.json"
+    audit.parent.mkdir(parents=True)
+    audit.write_text('{"partition": {"resolved_clusters": 2}}')
+
+    groups = _worker_groups(results, None, 4)
+
+    np.testing.assert_array_equal(groups, [0, 0, 1, 1])
 
 
 def test_filter_edges_removes_diagonal_and_below_threshold():

@@ -20,12 +20,13 @@ Three edge-weight modes:
 `mean + z * standard deviation`, removing low-signal edges without requiring
 an absolute threshold.
 
-For clustered pathological partitions, nodes are colored by cluster and laid
-out on concentric clusters; otherwise a spring layout is used.
+For clustered partitions, nodes are colored by cluster and laid out on
+concentric clusters; otherwise a spring layout is used.
 """
 
 from __future__ import annotations
 
+import json
 import pathlib
 from typing import Literal
 
@@ -55,21 +56,45 @@ def _hydra_cfg(run_dir: pathlib.Path):
     return None
 
 
-def _worker_groups(cfg, n_honest: int) -> np.ndarray | None:
-    """Return per-worker cluster IDs for clustered pathological partitions."""
-    if cfg is None:
+def _participant_counts(run_dir: pathlib.Path) -> tuple[int, int] | None:
+    for path in (run_dir / "audit.json", run_dir.parent / "audit.json"):
+        if not path.is_file():
+            continue
+        participants = json.loads(path.read_text()).get("participants", {})
+        total = participants.get("total")
+        honest = participants.get("honest")
+        if total is not None and honest is not None:
+            return int(total), int(honest)
+    return None
+
+
+def _worker_groups(run_dir: pathlib.Path, cfg, n_honest: int) -> np.ndarray | None:
+    """Return cluster IDs from the partition audit, with config as fallback."""
+    audits = [run_dir / "audit.json", *sorted(run_dir.glob("seeds/*/results/audit.json"))]
+    nb_groups = None
+    for path in audits:
+        if path.is_file():
+            partition = json.loads(path.read_text()).get("partition", {})
+            nb_groups = partition.get("resolved_clusters") or partition.get("clusters")
+            break
+    if nb_groups is None and cfg is not None:
+        nb_groups = cfg.get("heterogeneity", {}).get("clusters")
+    if nb_groups is None:
         return None
-    het = cfg.get("heterogeneity", {})
-    if str(het.get("method", "")) != "pathological":
-        return None
-    nb_groups = int(het.get("clusters") or n_honest)
+    nb_groups = int(nb_groups)
     if nb_groups == n_honest:
+        return None
+    if n_honest % nb_groups:
         return None
     return np.repeat(np.arange(nb_groups), n_honest // nb_groups)
 
 
 def _load_weights(
-    run_dir: pathlib.Path, weight_source: WeightSource, n_honest: int | None
+    run_dir: pathlib.Path,
+    weight_source: WeightSource,
+    n_honest: int | None,
+    *,
+    include_byzantine: bool = True,
 ) -> tuple[np.ndarray, bool]:
     """Return ``((N, N) honest-worker weight matrix, is_directed)``.
 
@@ -80,8 +105,11 @@ def _load_weights(
     """
     if weight_source == "sampler_weight":
         weights = _load_sampler_history(run_dir, "sampler_weights.npy", tail_fraction=0.1)
-        n = weights.shape[0]
-        return np.asarray(weights[:, :n], dtype=float), True
+        if include_byzantine and weights.shape[1] > weights.shape[0]:
+            full = np.zeros((weights.shape[1], weights.shape[1]), dtype=float)
+            full[: weights.shape[0], :] = weights
+            return full, True
+        return np.asarray(weights[:, : weights.shape[0]], dtype=float), True
     if weight_source == "sampler_probability":
         full_by_seed_path = run_dir / "sampler_probabilities_by_seed.npy"
         full_path = run_dir / "sampler_probabilities.npy"
@@ -103,9 +131,11 @@ def _load_weights(
             prob = np.load(path)
         else:
             raise FileNotFoundError(f"Missing {full_path}")
-        n = prob.shape[0]
-        honest_block = prob[:, :n]  # restrict to honest-honest edges
-        return np.asarray(honest_block, dtype=float), True
+        if include_byzantine and prob.shape[1] > prob.shape[0]:
+            full = np.zeros((prob.shape[1], prob.shape[1]), dtype=float)
+            full[: prob.shape[0], :] = prob
+            return full, True
+        return np.asarray(prob[:, : prob.shape[0]], dtype=float), True
     if weight_source == "neighbor_disagreement":
         by_seed_path = run_dir / "pairwise_model_distance_final_by_seed.npy"
         path = run_dir / "pairwise_model_distance_final.npy"
@@ -214,11 +244,39 @@ def _grouped_layout(groups: np.ndarray) -> dict[int, tuple[float, float]]:
     return pos
 
 
-def _node_colors(groups: np.ndarray | None, n: int):
+def _node_colors(groups: np.ndarray | None, n: int, n_honest: int | None = None):
+    if n_honest is not None and n > n_honest:
+        honest_colors = _node_colors(groups, n_honest)
+        return [*honest_colors, *(["tab:red"] * (n - n_honest))]
     if groups is None:
         return ["tab:blue"] * n
     cmap = cm.get_cmap("tab10")
     return [cmap(int(g) % 10) for g in groups]
+
+
+def _append_byzantine_positions(
+    honest_pos: dict[int, tuple[float, float]],
+    n_honest: int,
+    n: int,
+) -> dict[int, tuple[float, float]]:
+    pos = dict(honest_pos)
+    if n <= n_honest:
+        return pos
+
+    xs = [xy[0] for xy in honest_pos.values()] or [0.0]
+    ys = [xy[1] for xy in honest_pos.values()] or [0.0]
+    center = np.array([(min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2], dtype=float)
+    radius = max(
+        float(np.linalg.norm(np.array(xy, dtype=float) - center))
+        for xy in honest_pos.values()
+    )
+    radius = max(radius, 1.0)
+    byz_count = n - n_honest
+    for offset in range(byz_count):
+        theta = 2 * np.pi * offset / byz_count + np.pi / byz_count
+        xy = center + radius * np.array([np.cos(theta), np.sin(theta)])
+        pos[n_honest + offset] = (float(xy[0]), float(xy[1]))
+    return pos
 
 
 def plot_clustering_graph(
@@ -231,6 +289,7 @@ def plot_clustering_graph(
     top_edges_per_node: int | None = None,
     layout: Literal["auto", "spring", "group"] = "auto",
     title: str | None = None,
+    include_byzantine: bool = True,
 ) -> pathlib.Path:
     """Render and save the weighted clustering graph for `run_dir`.
 
@@ -244,12 +303,24 @@ def plot_clustering_graph(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     cfg = _hydra_cfg(run_dir)
     n_honest = None
-    if cfg is not None:
+    participants = _participant_counts(run_dir)
+    if participants is not None:
+        _, n_honest = participants
+    elif cfg is not None:
         nb_workers = int(OmegaConf.select(cfg, "topology.nodes"))
         nb_byz = int(OmegaConf.select(cfg, "adversary.byzcount") or 0)
         n_honest = nb_workers - nb_byz
 
-    weights, directed = _load_weights(run_dir, weight_source, n_honest)
+    include_byzantine = include_byzantine and weight_source in {
+        "sampler_weight",
+        "sampler_probability",
+    }
+    weights, directed = _load_weights(
+        run_dir,
+        weight_source,
+        n_honest,
+        include_byzantine=include_byzantine,
+    )
     n = weights.shape[0]
     weights = _filter_edges(
         weights,
@@ -261,8 +332,18 @@ def plot_clustering_graph(
 
     create_using = nx.DiGraph if directed else nx.Graph
     graph = nx.from_numpy_array(weights, create_using=create_using)
-    groups = _worker_groups(cfg, n) if cfg is not None else None
-    if layout == "group" or (layout == "auto" and groups is not None):
+    groups = _worker_groups(run_dir, cfg, n_honest or n)
+    if include_byzantine and n_honest is not None and n > n_honest:
+        if layout == "group" or (layout == "auto" and groups is not None):
+            honest_pos = (
+                _grouped_layout(groups)
+                if groups is not None
+                else nx.spring_layout(graph.subgraph(range(n_honest)), seed=0, weight="weight")
+            )
+        else:
+            honest_pos = nx.spring_layout(graph.subgraph(range(n_honest)), seed=0, weight="weight")
+        pos = _append_byzantine_positions(honest_pos, n_honest, n)
+    elif layout == "group" or (layout == "auto" and groups is not None):
         if groups is None:
             pos = nx.spring_layout(graph, seed=0, weight="weight")
         else:
@@ -310,7 +391,7 @@ def plot_clustering_graph(
     nx.draw_networkx_nodes(
         graph,
         pos,
-        node_color=_node_colors(groups, n),
+        node_color=_node_colors(groups, n, n_honest if include_byzantine else None),
         node_size=node_size,
         edgecolors="black",
         linewidths=0.6,
@@ -331,7 +412,7 @@ def plot_clustering_graph(
         ax.text(
             0.5,
             -0.02,
-            f"Edges exceed each source node's mean + {relative_threshold:g}σ.",
+            f"Edges exceed each source node's mean + {relative_threshold:g} std.",
             transform=ax.transAxes,
             ha="center",
             fontsize=8,
@@ -383,7 +464,7 @@ def plot_collaboration_embedding(
     run_dir: pathlib.Path,
     output_path: pathlib.Path,
     *,
-    relative_threshold: float = 1.0,
+    relative_threshold: float | None = None,
     tail_fraction: float = 0.1,
 ) -> pathlib.Path:
     """Plot nodes close together when their sampler weights are mutually strong."""
@@ -406,15 +487,18 @@ def plot_collaboration_embedding(
     collaboration = mutual_collaboration(weights)
     coordinates = spectral_embedding(collaboration)
 
-    strong = _filter_edges(
-        weights,
-        directed=True,
-        relative_threshold=relative_threshold,
-    )
-    visible = collaboration * ((strong > 0) & (strong.T > 0))
+    if relative_threshold is None:
+        visible = collaboration
+    else:
+        strong = _filter_edges(
+            weights,
+            directed=True,
+            relative_threshold=relative_threshold,
+        )
+        visible = collaboration * ((strong > 0) & (strong.T > 0))
     graph = nx.from_numpy_array(visible)
     pos = {node: coordinates[node] for node in range(n)}
-    groups = _worker_groups(cfg, n) if cfg is not None else None
+    groups = _worker_groups(run_dir, cfg, n)
 
     edges = list(graph.edges(data="weight"))
     strengths = np.array([weight for _, _, weight in edges])
@@ -443,17 +527,13 @@ def plot_collaboration_embedding(
     fidelity = _embedding_fidelity(collaboration, coordinates)
     fidelity_text = "undefined" if np.isnan(fidelity) else f"{fidelity:.2f}"
     ax.set_title("Mutual Sampler Collaboration")
-    ax.text(
-        0.5,
-        -0.04,
-        (
+    caption = f"Positions and edges use all mutual weights. Fidelity r={fidelity_text}."
+    if relative_threshold is not None:
+        caption = (
             f"Positions use all mutual weights; visible edges exceed both nodes' "
-            f"mean + {relative_threshold:g}σ. Fidelity r={fidelity_text}."
-        ),
-        transform=ax.transAxes,
-        ha="center",
-        fontsize=8,
-    )
+            f"mean + {relative_threshold:g} std. Fidelity r={fidelity_text}."
+        )
+    ax.text(0.5, -0.04, caption, transform=ax.transAxes, ha="center", fontsize=8)
     ax.set_axis_off()
     fig.tight_layout()
     fig.savefig(output_path, dpi=160, bbox_inches="tight")

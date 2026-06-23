@@ -37,6 +37,9 @@ DEFAULT_PLOT_METRICS: tuple[str, ...] = (
     "sampler_weight_entropy",
     "sampler_min_weight",
     "sampler_max_weight",
+    "byzantine_probability_mass",
+    "byzantine_weight_mass",
+    "byzantine_selection_fraction",
 )
 
 DEFAULT_DIRECTIONS: tuple[str, ...] = ("final", "avg", "worse")
@@ -122,6 +125,47 @@ def _when_clause(spec):
     return None
 
 
+def _produced_paths(path, inner_spec) -> set[str]:
+    paths = {path}
+    if _is_tuple_spec(inner_spec):
+        for choice in inner_spec.get("choices", []):
+            paths.update(str(key) for key in _tuple_choice_params(choice))
+    return paths
+
+
+def _ordered_search_paths(search_space):
+    paths = list(search_space.keys())
+    produced_by = {}
+    dependencies = {}
+
+    for path in paths:
+        inner_spec, _ = _strip_meta(search_space[path])
+        for produced in _produced_paths(path, inner_spec):
+            produced_by.setdefault(produced, set()).add(path)
+
+    for path in paths:
+        deps = set()
+        for dep_path in (_when_clause(search_space[path]) or {}):
+            deps.update(produced_by.get(dep_path, set()))
+        deps.discard(path)
+        dependencies[path] = deps
+
+    ordered = []
+    remaining = set(paths)
+    while remaining:
+        ready = [
+            path
+            for path in paths
+            if path in remaining and dependencies[path].issubset(set(ordered))
+        ]
+        if not ready:
+            ordered.extend(path for path in paths if path in remaining)
+            break
+        ordered.extend(ready)
+        remaining.difference_update(ready)
+    return ordered
+
+
 def _conditions_met(cfg, conditions):
     if conditions is None:
         return True
@@ -138,7 +182,7 @@ def _conditions_met(cfg, conditions):
 
 
 def _normalize_search_space(search_space):
-    paths = sorted(search_space.keys())
+    paths = _ordered_search_paths(search_space)
     normalized = {}
     display_names = {}
     for path in paths:

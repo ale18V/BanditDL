@@ -1,0 +1,29 @@
+name: cifar-uniform-baseline
+direction: maximize
+workers: 40
+
+plot:
+  directions: [final]
+  heatmaps:
+    - x: optimization.learning_rate
+      y: topology.sampling
+      aggregate_by: avg
+      render: [heatmap]
+      exclude_metrics: []
+  lines:
+    - x: optimization.learning_rate
+      group_by:
+        - topology.sampling
+      aggregate_by: avg
+      metrics: [validation_accuracy, global_accuracy, validation_loss, global_loss]
+      exclude_metrics: []
+
+search_space:
+  topology.sampling:
+    name: sampling
+    type: categorical
+    choices: [0.5, 0.7, 1.0]
+  optimization.learning_rate:
+    name: learning_rate
+    type: categorical
+    choices: [0.001, 0.005, 0.01, 0.05]

@@ -1,0 +1,80 @@
+name: femnist-pathological-fixed
+# Fixed rerun of the pre-bug 2026-06-11 clustered-Dirichlet FEMNIST sweep.
+direction: maximize
+workers: 32
+seeds: [123, 124, 125]
+
+plot:
+  directions: [final]
+  heatmaps:
+    - x: sweep.partition_profile
+      y: sampler.name
+      aggregate_by: avg
+      render: [heatmap]
+      metrics: [validation_accuracy, global_accuracy]
+      exclude_metrics: []
+    - x: sweep.partition_profile
+      y: sampler.reward
+      split_by:
+        - sampler.name
+      aggregate_by: avg
+      render: [heatmap]
+      metrics: [validation_accuracy, global_accuracy]
+      exclude_metrics: []
+  lines: []
+
+search_space:
+  sweep.partition_profile:
+    name: partition
+    type: tuple
+    choices:
+      - label: c3_k15_s0.3
+        params:
+          heterogeneity.clusters: 3
+          topology.sampling: 0.3
+      - label: c5_k9_s0.2
+        params:
+          heterogeneity.clusters: 5
+          topology.sampling: 0.2
+      - label: c10_k4_s0.1
+        params:
+          heterogeneity.clusters: 10
+          topology.sampling: 0.1
+  heterogeneity.alpha:
+    name: alpha
+    type: categorical
+    choices: [0.5, 1.0, 5.0, 10]
+  sampler.name:
+    name: sampler
+    type: categorical
+    choices: [uniform, epsilon_greedy, exp3, cucb, cts, discounted_cucb, discounted_cts]
+  sampler.reward:
+    name: reward
+    type: categorical
+    choices: [parameter_distance, update_cosine_similarity]
+    when:
+      sampler.name: [epsilon_greedy, exp3, cucb, cts, discounted_cucb, discounted_cts]
+  sampler.params.epsilon:
+    name: epsilon
+    type: categorical
+    choices: [0.1]
+    when:
+      sampler.name: [epsilon_greedy]
+  sampler.params.gamma:
+    name: gamma
+    type: categorical
+    choices: [auto]
+    when:
+      sampler.name: [exp3]
+  sampler.params.exploration:
+    name: exploration
+    type: categorical
+    choices: [1.0]
+    when:
+      sampler.name: [cucb, discounted_cucb]
+  sampler.params.discount:
+    name: discount
+    type: categorical
+    choices: [0.9]
+    when:
+      sampler.name: [discounted_cucb, discounted_cts]

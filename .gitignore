@@ -1,3 +1,4 @@
+slurm/*
 .DS_store
 .hydra_runs/
 .hydra_multirun/
@@ -15,3 +16,5 @@ hydra_runs_override/
 optuna_runs/
 .optuna_runs/
 job_output/
+
+local/

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+import json
 from pathlib import Path
 from typing import Protocol
 import warnings
@@ -21,6 +22,7 @@ class MetricKey(StrEnum):
     REWARD_ORACLE = "reward_oracle"
     REWARD_SELECTED_MIN = "reward_selected_min"
     REWARD_SELECTED_MAX = "reward_selected_max"
+    SELECTED_NEIGHBORS = "selected_neighbors"
     REGRET = "regret"
     NORMALIZED_REGRET = "normalized_regret"
     NEIGHBOR_DISAGREEMENT = "neighbor_disagreement"
@@ -36,6 +38,9 @@ class MetricKey(StrEnum):
     SAMPLER_WEIGHT_ENTROPY = "sampler_weight_entropy"
     SAMPLER_MIN_WEIGHT = "sampler_min_weight"
     SAMPLER_MAX_WEIGHT = "sampler_max_weight"
+    BYZANTINE_PROBABILITY_MASS = "byzantine_probability_mass"
+    BYZANTINE_WEIGHT_MASS = "byzantine_weight_mass"
+    BYZANTINE_SELECTION_FRACTION = "byzantine_selection_fraction"
 
 
 ALIASES = {}
@@ -182,6 +187,40 @@ def sampler_distribution_summary(metric: MetricKey, distribution: np.ndarray) ->
     raise ValueError(f"{metric.value} is not a sampler distribution summary")
 
 
+def byzantine_distribution_mass(distribution: np.ndarray, honest_count: int) -> np.ndarray:
+    distribution = np.asarray(distribution, dtype=float)
+    if distribution.ndim < 2:
+        raise ValueError("sampler distribution must have worker and arm axes")
+    workers, arms = distribution.shape[-2:]
+    if honest_count >= arms:
+        return np.zeros(distribution.shape[:-1], dtype=float)
+
+    valid = distribution.copy()
+    for worker_id in range(min(workers, arms)):
+        valid[..., worker_id, worker_id] = np.nan
+    totals = np.nansum(valid, axis=-1, keepdims=True)
+    normalized = np.divide(
+        valid,
+        totals,
+        out=np.full_like(valid, np.nan, dtype=float),
+        where=totals > 0,
+    )
+    return np.nansum(normalized[..., honest_count:arms], axis=-1)
+
+
+def byzantine_selection_fraction(selected: np.ndarray, honest_count: int) -> np.ndarray:
+    selected = np.asarray(selected)
+    valid = selected >= 0
+    byzantine = selected >= honest_count
+    counts = valid.sum(axis=-1)
+    return np.divide(
+        (byzantine & valid).sum(axis=-1),
+        counts,
+        out=np.full(counts.shape, np.nan, dtype=float),
+        where=counts > 0,
+    )
+
+
 def trim_unwritten_rounds(values: np.ndarray) -> np.ndarray:
     values = np.asarray(values)
     time_axis = 1 if values.ndim == 4 else 0
@@ -253,6 +292,21 @@ class MetricLoader:
         key = resolve_metric(metric)
         if key == MetricKey.NORMALIZED_REGRET:
             return TimeAverage()(self.load_values(MetricKey.REGRET))
+        if key == MetricKey.BYZANTINE_PROBABILITY_MASS:
+            return byzantine_distribution_mass(
+                self.load_values(MetricKey.SAMPLER_PROBABILITIES),
+                self._honest_count(),
+            )
+        if key == MetricKey.BYZANTINE_WEIGHT_MASS:
+            return byzantine_distribution_mass(
+                self.load_values(MetricKey.SAMPLER_WEIGHTS),
+                self._honest_count(),
+            )
+        if key == MetricKey.BYZANTINE_SELECTION_FRACTION:
+            return byzantine_selection_fraction(
+                self.load_values(MetricKey.SELECTED_NEIGHBORS),
+                self._honest_count(),
+            )
         if key in SAMPLER_PROBABILITY_DERIVED:
             try:
                 return sampler_distribution_summary(
@@ -289,6 +343,21 @@ class MetricLoader:
         key = resolve_metric(metric)
         if key == MetricKey.NORMALIZED_REGRET:
             return TimeAverage()(self.load_seed_values(MetricKey.REGRET))
+        if key == MetricKey.BYZANTINE_PROBABILITY_MASS:
+            return byzantine_distribution_mass(
+                self.load_seed_values(MetricKey.SAMPLER_PROBABILITIES),
+                self._honest_count(),
+            )
+        if key == MetricKey.BYZANTINE_WEIGHT_MASS:
+            return byzantine_distribution_mass(
+                self.load_seed_values(MetricKey.SAMPLER_WEIGHTS),
+                self._honest_count(),
+            )
+        if key == MetricKey.BYZANTINE_SELECTION_FRACTION:
+            return byzantine_selection_fraction(
+                self.load_seed_values(MetricKey.SELECTED_NEIGHBORS),
+                self._honest_count(),
+            )
         if key in SAMPLER_PROBABILITY_DERIVED:
             try:
                 return sampler_distribution_summary(
@@ -378,6 +447,16 @@ class MetricLoader:
     def _npy_paths(self, filename: str) -> tuple[Path, Path]:
         stem = Path(filename).stem
         return self.run_dir / f"{stem}_by_seed.npy", self.run_dir / filename
+
+    def _honest_count(self) -> int:
+        for path in (self.run_dir / "audit.json", self.run_dir.parent / "audit.json"):
+            if path.exists():
+                participants = json.loads(path.read_text()).get("participants", {})
+                honest = participants.get("honest")
+                if honest is not None:
+                    return int(honest)
+        values = self.load_values(MetricKey.SAMPLER_PROBABILITIES)
+        return int(values.shape[-2])
 
 
 def scalar_reduce(metric: MetricKey | str, values: np.ndarray, direction: str) -> float:

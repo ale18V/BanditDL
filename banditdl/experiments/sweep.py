@@ -369,26 +369,9 @@ def _run_pending(  # noqa: C901,PLR0912,PLR0915 - scheduling and retry policy be
                 print(
                     f"[optuna] config={result['config_id']:04d} "
                     f"seed={result['seed']} "
-                    f"attempt={task['attempt']}/{_MAX_ATTEMPTS} failed; retrying"
+                    f"attempt={task['attempt']}/{_MAX_ATTEMPTS} failed; "
+                    "will be retried by the next sweep resume"
                 )
-                retry = dict(task)
-                retry["attempt"] = task["attempt"] + 1
-                retry_result = executor.submit(_run_configuration, retry).result()
-                _record_result(study, retry_result, distributions, output_root)
-                if not retry_result["ok"]:
-                    failed.append((result["config_id"], result["seed"]))
-                    print(
-                        f"[optuna] config={result['config_id']:04d} "
-                        f"seed={result['seed']} "
-                        f"failed after retry; see {retry_result['result_dir']}"
-                    )
-                else:
-                    print(
-                        f"[optuna] config={retry_result['config_id']:04d} "
-                        f"seed={retry_result['seed']} "
-                        f"retry ok value={retry_result['value']:.6f} "
-                        f"device={retry_result['device']}"
-                    )
             else:
                 failed.append((result["config_id"], result["seed"]))
                 print(

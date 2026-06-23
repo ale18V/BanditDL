@@ -40,8 +40,8 @@ def main():
     parser.add_argument(
         "--relative-threshold",
         type=float,
-        default=1.0,
-        help="keep outgoing edges above row mean + z standard deviations",
+        default=None,
+        help="keep outgoing edges above row mean + z standard deviations (default: all edges)",
     )
     parser.add_argument(
         "--top-edges",
@@ -58,6 +58,11 @@ def main():
         "--embedding",
         action="store_true",
         help="plot the mutual sampler-weight spectral embedding instead of the graph",
+    )
+    parser.add_argument(
+        "--hide-byzantine",
+        action="store_true",
+        help="hide Byzantine target nodes in sampler graphs",
     )
     parser.add_argument(
         "--name",
@@ -94,6 +99,7 @@ def main():
                     relative_threshold=args.relative_threshold,
                     top_edges_per_node=args.top_edges,
                     layout=args.layout,
+                    include_byzantine=not args.hide_byzantine,
                 )
         except FileNotFoundError as exc:
             print(f"[skip] {run_dir}: {exc}")

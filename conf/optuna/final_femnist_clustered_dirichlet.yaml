@@ -1,0 +1,92 @@
+name: final-femnist-clustered-dirichlet
+# Replaces the pre-bug 2026-06-11 clustered-Dirichlet FEMNIST sweep.
+direction: maximize
+workers: 48
+seeds: [123, 124, 125]
+
+plot:
+  directions: [final]
+  heatmaps:
+    - x: heterogeneity.alpha
+      y: sweep.partition_profile
+      split_by:
+        - sampler.name
+      aggregate_by: avg
+      render: [heatmap]
+      metrics: [validation_accuracy, global_accuracy]
+      exclude_metrics: []
+    - x: heterogeneity.alpha
+      y: sampler.reward
+      split_by:
+        - sweep.partition_profile
+        - sampler.name
+      aggregate_by: avg
+      render: [heatmap]
+      metrics: [validation_accuracy, global_accuracy]
+      exclude_metrics: []
+  lines: []
+
+search_space:
+  sweep.partition_profile:
+    name: partition
+    type: tuple
+    choices:
+      - label: c3_s0.3
+        params:
+          heterogeneity.clusters: 3
+          topology.sampling: 0.3
+      - label: c5_s0.2
+        params:
+          heterogeneity.clusters: 5
+          topology.sampling: 0.2
+      - label: c10_s0.1
+        params:
+          heterogeneity.clusters: 10
+          topology.sampling: 0.1
+  heterogeneity.alpha:
+    name: alpha
+    type: categorical
+    choices: [0.3, 0.5, 1.0, 5.0]
+
+  sweep.sampler:
+    name: sampler
+    type: tuple
+    choices:
+      - label: uniform
+        params:
+          sampler.name: uniform
+      - label: epsilon_greedy
+        params:
+          sampler.name: epsilon_greedy
+          sampler.params.epsilon: 0.1
+          sampler.params.initial_value: 0.0
+      - label: exp3
+        params:
+          sampler.name: exp3
+          sampler.params.gamma: auto
+          sampler.params.lower: 0.0
+          sampler.params.amplitude: 1.0
+      - label: cucb
+        params:
+          sampler.name: cucb
+          sampler.params.exploration: 1.0
+      - label: cts
+        params:
+          sampler.name: cts
+      - label: discounted_cucb
+        params:
+          sampler.name: discounted_cucb
+          sampler.params.exploration: 1.0
+      - label: discounted_cts
+        params:
+          sampler.name: discounted_cts
+  sampler.reward:
+    name: reward
+    type: categorical
+    choices: [parameter_distance, update_cosine_similarity]
+  sampler.params.discount:
+    name: discount
+    type: categorical
+    choices: [0.9, 0.95, 0.99]
+    when:
+      sampler.name: [discounted_cucb, discounted_cts]

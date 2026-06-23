@@ -1,0 +1,56 @@
+name: femnist-dirichlet-structure
+direction: maximize
+workers: 40
+
+plot:
+  directions: [final]
+  heatmaps:
+    - x: heterogeneity.alpha
+      y: sampler.name
+      split_by:
+        - sampler.reward
+      aggregate_by: avg
+      render: [heatmap]
+      metrics: [validation_accuracy, global_accuracy]
+      exclude_metrics: []
+  lines: []
+
+search_space:
+  heterogeneity.alpha:
+    name: alpha
+    type: categorical
+    choices: [0.1, 0.3, 0.5, 1.0, 10.0]
+  sampler.name:
+    name: sampler
+    type: categorical
+    choices: [uniform, epsilon_greedy, exp3, cucb, cts, discounted_cucb, discounted_cts]
+  sampler.reward:
+    name: reward
+    type: categorical
+    choices: [parameter_distance, update_cosine_similarity]
+    when:
+      sampler.name: [epsilon_greedy, exp3, cucb, cts, discounted_cucb, discounted_cts]
+  sampler.params.epsilon:
+    name: epsilon
+    type: categorical
+    choices: [0.1]
+    when:
+      sampler.name: [epsilon_greedy]
+  sampler.params.gamma:
+    name: gamma
+    type: categorical
+    choices: [auto]
+    when:
+      sampler.name: [exp3]
+  sampler.params.exploration:
+    name: exploration
+    type: categorical
+    choices: [1.0]
+    when:
+      sampler.name: [cucb, discounted_cucb]
+  sampler.params.discount:
+    name: discount
+    type: categorical
+    choices: [0.9]
+    when:
+      sampler.name: [discounted_cucb, discounted_cts]
