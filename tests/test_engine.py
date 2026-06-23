@@ -92,18 +92,20 @@ def test_mean_selected_reward_is_cardinality_normalized():
 
 def test_dynamic_candidate_deltas_use_last_model_updates():
     worker = type("Worker", (), {"worker_id": 0})()
+    byz_delta = torch.tensor([0.5, -0.5])
+    byz = type("Byz", (), {"delta": lambda self: byz_delta})()
     deltas = [
         torch.tensor([1.0, 0.0]),
         torch.tensor([0.0, 1.0]),
         torch.tensor([-1.0, 0.0]),
     ]
 
-    candidates = _dynamic_candidate_deltas(worker, deltas, {3: object()})
+    candidates = _dynamic_candidate_deltas(worker, deltas, {3: byz})
 
     assert set(candidates) == {1, 2, 3}
     torch.testing.assert_close(candidates[1], deltas[1])
     torch.testing.assert_close(candidates[2], deltas[2])
-    torch.testing.assert_close(candidates[3], torch.zeros_like(deltas[0]))
+    torch.testing.assert_close(candidates[3], byz_delta)
 
 
 def test_full_participation_aggregates_from_one_round_snapshot():

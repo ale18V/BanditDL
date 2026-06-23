@@ -401,8 +401,10 @@ def _dynamic_candidate_weights(w, honest_weights, byz_by_id):
 
 def _dynamic_candidate_deltas(w, honest_deltas, byz_by_id):
     deltas = {i: delta for i, delta in enumerate(honest_deltas) if i != w.worker_id}
-    for byz_id in byz_by_id:
-        deltas[byz_id] = torch.zeros_like(honest_deltas[w.worker_id])
+    for byz_id, byz in byz_by_id.items():
+        delta = byz.delta()
+        if delta is not None:
+            deltas[byz_id] = delta
     return deltas
 
 

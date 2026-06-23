@@ -1,5 +1,7 @@
 """Byzantine worker implementations for distributed training."""
 
+import torch
+
 from banditdl.core.robustness.aggregators import RobustAggregator
 from banditdl.core.robustness.attacks import ByzantineAttack
 from banditdl.core.worker.base import BaseWorker
@@ -36,6 +38,8 @@ class ByzantineWorker(BaseWorker):
             robust_aggregator,
         )
         self.cached_vector = None
+        self.previous_vector = None
+        self.cached_delta = None
 
     def train(self) -> None:
         return None
@@ -48,10 +52,24 @@ class ByzantineWorker(BaseWorker):
         vectors = self.byzantine_attack.generate_byzantine_vectors(
             honest_weights, None, step
         )
-        self.cached_vector = vectors[0] if len(vectors) > 0 else None
+        next_vector = vectors[0] if len(vectors) > 0 else None
+        if next_vector is None:
+            self.cached_vector = None
+            self.cached_delta = None
+            return
+
+        if self.previous_vector is None:
+            self.cached_delta = torch.zeros_like(next_vector)
+        else:
+            self.cached_delta = next_vector - self.previous_vector
+        self.previous_vector = next_vector.detach().clone()
+        self.cached_vector = next_vector
 
     def pull(self, context=None):
         return self.cached_vector
+
+    def delta(self):
+        return self.cached_delta
 
     def compute_validation_accuracy(self):
         return None
