@@ -1,15 +1,17 @@
-name: test-mnist-adversary
+name: mnist-sf-controlled
 direction: maximize
 workers: 40
 seeds: [0, 1, 2]
 
 plot:
   directions: [final]
+  single_runs:
+    enabled: true
   heatmaps:
     - x: sweep.adversary
       y: sweep.sampler
       split_by:
-        - sampler.reward
+        - heterogeneity.alpha
       aggregate_by: avg
       render: [heatmap]
       metrics: [validation_accuracy, global_accuracy]
@@ -18,7 +20,8 @@ plot:
     - x: sweep.adversary
       group_by:
         - sweep.sampler
-        - sampler.reward
+      split_by:
+        - heterogeneity.alpha
       aggregate_by: avg
       metrics: [validation_accuracy, global_accuracy]
       exclude_metrics: []
@@ -30,29 +33,29 @@ search_space:
     choices:
       - label: honest
         params:
+          topology.nodes: 30
+          topology.sampling: 0.2
           adversary.byzcount: 0
           adversary.byzantine_budget: 0
           adversary.attack: null
-      - label: alie_f3
-        params:
-          adversary.byzcount: 3
-          adversary.byzantine_budget: 3
-          adversary.attack: ALIE
-      - label: alie_f6
-        params:
-          adversary.byzcount: 6
-          adversary.byzantine_budget: 6
-          adversary.attack: ALIE
       - label: sf_f3
         params:
+          topology.nodes: 33
+          topology.sampling: 0.1875
           adversary.byzcount: 3
           adversary.byzantine_budget: 3
           adversary.attack: SF
       - label: sf_f6
         params:
+          topology.nodes: 36
+          topology.sampling: 0.17142857142857143
           adversary.byzcount: 6
           adversary.byzantine_budget: 6
           adversary.attack: SF
+  heterogeneity.alpha:
+    name: alpha
+    type: categorical
+    choices: [0.5, 1.0, 10.0]
   sweep.sampler:
     name: sampler
     type: tuple
@@ -78,7 +81,3 @@ search_space:
       - label: cts
         params:
           sampler.name: cts
-  sampler.reward:
-    name: reward
-    type: categorical
-    choices: [parameter_distance, update_cosine_similarity]

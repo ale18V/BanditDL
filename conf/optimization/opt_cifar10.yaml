@@ -1,6 +1,6 @@
 batch_size: 50
 loss: CrossEntropyLoss
-learning_rate: 5e-3
+learning_rate: 0.05
 rounds: 2000
 momentum_worker: 0.9
 nb_local_steps: 1

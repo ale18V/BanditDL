@@ -5,7 +5,7 @@ defaults:
 
 hydra:
   run:
-    dir: ${oc.env:SCRATCH}/banditdl/optuna_runs/${optuna.name}/${now:%Y-%m-%d_%H-%M-%S}_${oc.env:SLURM_JOB_ID,local}
+    dir: ${oc.env:SCRATCH}/banditdl/optuna_runs/${dataset.dataset}/${optuna.name}/${now:%Y-%m-%d_%H-%M-%S}_${oc.env:SLURM_JOB_ID,local}
 
 plot:
   enabled: true

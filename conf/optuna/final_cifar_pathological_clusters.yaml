@@ -81,6 +81,8 @@ search_space:
     name: group_overlap
     type: categorical
     choices: [0, 1]
+    when:
+      sweep.partition_profile: [c3_k4_s0.3, c5_k2_s0.2]
   sampler.reward:
     name: reward
     type: categorical
